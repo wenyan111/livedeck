@@ -7,6 +7,8 @@
 - **设计 token:** 新增 `--success-foreground`（浅色/深色均为纯白）与 `--color-success-foreground`，供绿底上的文字/图标使用。
 - **按钮:** 新增 `success` 变体（`bg-success` + 白字 + hover 90%）；「开启 / 开始」类动作统一改用它——首页「一键开启」、各功能页「开始任务」（TaskButton）、开价联动「开启监听」现在都是绿色，与「一键停止 / 停止任务」的红色形成对仗；「停止」「下载」「连接」等仍保持中性色。
 - **开价联动:** 触发源未监听时，「开启监听」显示为绿色；监听中变回中性 `secondary` 的「停止监听」。
+- **打包:** `electron-builder.json` 的 `files` 增加 `!**/fsevents/**`——fsevents 是 `playwright` 的可选依赖、
+  只在 macOS 上被安装，打包 Windows 时会被一并复制进来，现已排除。
 
 ## v1.7.11
 

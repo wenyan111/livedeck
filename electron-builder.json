@@ -6,7 +6,7 @@
     "output": "release/${version}"
   },
   "electronLanguages": ["zh-CN", "en-US"],
-  "files": ["dist-electron", "dist"],
+  "files": ["dist-electron", "dist", "!**/fsevents/**"],
   "mac": {
     "artifactName": "${productName}_${version}_macos_${arch}.${ext}",
     "target": [
