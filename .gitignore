@@ -51,3 +51,7 @@ screenshot/
 _tmp_*
 dmg_mount.txt
 .husky/_/
+# 分发产物（源码包 / 安装包），只交付不入库
+*-source.tar.gz
+oba-live-tool*.exe
+oba-live-tool*.dmg
