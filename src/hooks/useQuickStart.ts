@@ -10,7 +10,7 @@ import { useAutoMessageStore } from '@/hooks/useAutoMessage'
 import { useAutoPopUpStore } from '@/hooks/useAutoPopUp'
 import { useAutoReplyStore } from '@/hooks/useAutoReply'
 import { useAutoReplyConfigStore } from '@/hooks/useAutoReplyConfig'
-import { useCurrentLiveControl } from '@/hooks/useLiveControl'
+import { useCurrentLiveControl, useLiveControlStore } from '@/hooks/useLiveControl'
 import { buildOpenPriceSendMessages, useOpenPriceScriptStore } from '@/hooks/useOpenPriceScript'
 import { useToast } from '@/hooks/useToast'
 
@@ -44,6 +44,43 @@ function buildDefaultSelection(): Record<LiveControlPlatform, Record<QuickStartK
 }
 
 /**
+ * v3 存储结构：selection[accountId][platform] —— 「账号 × 平台」双重隔离。
+ * 同一平台下的不同账号（如抖音午场/晚场两个账号）各记一份勾选，互不影响。
+ * `__platform` 是 v2（仅按平台隔离）的遗留数据：账号尚无自己的勾选时读它兜底，
+ * 保证升级后老勾选不丢；该账号在该平台第一次改动勾选时才落地自己的完整副本。
+ */
+type PerPlatformSelection = Partial<Record<LiveControlPlatform, Record<QuickStartKey, boolean>>>
+
+/** 每个平台各自的「连接后自动开启」开关值（Partial 实现遗留兜底） */
+type PerPlatformAutoStart = Partial<Record<LiveControlPlatform, boolean>>
+
+/** 读取「账号 × 平台」的「连接后自动开启」开关（无自己的值时回落到 v3 前的全局值，默认开） */
+export function readQuickStartAutoStart(
+  autoStart: Record<string, PerPlatformAutoStart | undefined>,
+  accountId: string | undefined,
+  platform: LiveControlPlatform,
+): boolean {
+  return Boolean(
+    (accountId ? autoStart[accountId]?.[platform] : undefined) ??
+      autoStart.__platform?.[platform] ??
+      true,
+  )
+}
+
+/** 读取「账号 × 平台」的勾选（账号无自己的数据时回落到 v2 按平台的遗留数据） */
+export function readQuickStartSelection(
+  selection: Record<string, PerPlatformSelection | undefined>,
+  accountId: string | undefined,
+  platform: LiveControlPlatform,
+): Record<QuickStartKey, boolean> {
+  return (
+    (accountId ? selection[accountId]?.[platform] : undefined) ??
+    selection.__platform?.[platform] ??
+    DEFAULT_PER_PLATFORM
+  )
+}
+
+/**
  * 各功能限定的平台，不在列表里 = 该平台不支持启动。
  * 一键开启 / 连接后自动开启都必须按这个过滤，
  * 否则在快手 / 小红书等平台上会去启动「开价监听」必然失败，白亮一个红点。
@@ -62,37 +99,57 @@ export const isQuickStartSupported = (key: QuickStartKey, platform?: LiveControl
 }
 
 interface QuickStartStore {
-  /** 每个平台各自记住一键开启要启动哪些功能（互不影响） */
-  selection: Record<LiveControlPlatform, Record<QuickStartKey, boolean>>
-  /** 连接中控台成功后是否自动开启 */
-  autoStartOnConnect: boolean
-  toggle: (platform: LiveControlPlatform, key: QuickStartKey, checked: boolean) => void
-  setAutoStartOnConnect: (enabled: boolean) => void
+  /** 每个账号 × 平台各自记住一键开启要启动哪些功能（互不影响）；`__platform` 为 v2 遗留兜底 */
+  selection: Record<string, PerPlatformSelection | undefined>
+  /** 每个账号 × 平台各自的「连接后自动开启」开关；`__platform` 为 v3 前全局值的遗留兜底 */
+  autoStart: Record<string, PerPlatformAutoStart | undefined>
+  toggle: (
+    accountId: string,
+    platform: LiveControlPlatform,
+    key: QuickStartKey,
+    checked: boolean,
+  ) => void
+  setAutoStartOnConnect: (
+    accountId: string,
+    platform: LiveControlPlatform,
+    enabled: boolean,
+  ) => void
 }
 
 export const useQuickStartStore = create<QuickStartStore>()(
   persist(
     immer(set => ({
-      selection: buildDefaultSelection(),
-      autoStartOnConnect: true,
-      toggle: (platform, key, checked) =>
+      selection: {},
+      autoStart: {},
+      toggle: (accountId, platform, key, checked) =>
         set(state => {
-          if (!state.selection[platform]) {
-            state.selection[platform] = { ...DEFAULT_PER_PLATFORM }
+          // 首次改动时，以「当前生效的勾选」（含 v2 遗留兜底）为底本落一份完整副本，
+          // 避免只写单个 key 后读取时无法再回落到遗留数据
+          const base = {
+            ...(state.selection.__platform?.[platform] ?? DEFAULT_PER_PLATFORM),
+            ...(state.selection[accountId]?.[platform] ?? {}),
           }
-          state.selection[platform][key] = checked
+          state.selection[accountId] = {
+            ...state.selection[accountId],
+            [platform]: { ...base, [key]: checked },
+          }
         }),
-      setAutoStartOnConnect: enabled =>
+      setAutoStartOnConnect: (accountId, platform, enabled) =>
         set(state => {
-          state.autoStartOnConnect = enabled
+          state.autoStart[accountId] = {
+            ...state.autoStart[accountId],
+            [platform]: enabled,
+          }
         }),
     })),
     {
       name: 'quick-start-storage',
-      version: 2,
+      version: 3,
       migrate: (persisted: any, version: number) => {
-        // 旧版本（v1）的 selection 是全局的 Record<QuickStartKey, boolean>，
-        // 把它当作「所有平台共用的初始勾选」迁移成按平台隔离的结构。
+        // v1：selection 是全局的 Record<QuickStartKey, boolean>，autoStartOnConnect 全局布尔
+        // v2：selection 升级为按平台隔离
+        // v3：升级为「账号 × 平台」双重隔离；旧数据挪到 `__platform` 作读兜底
+        let perPlatform: Record<LiveControlPlatform, Record<QuickStartKey, boolean>>
         if (version < 2) {
           const old = persisted?.selection
           const base: Record<QuickStartKey, boolean> = { ...DEFAULT_PER_PLATFORM }
@@ -101,11 +158,25 @@ export const useQuickStartStore = create<QuickStartStore>()(
               if (typeof old[k] === 'boolean') base[k] = old[k]
             }
           }
-          const selection = buildDefaultSelection()
+          perPlatform = buildDefaultSelection()
           for (const platform of ALL_PLATFORMS) {
-            selection[platform] = { ...base }
+            perPlatform[platform] = { ...base }
           }
-          return { ...persisted, selection }
+        } else {
+          perPlatform = persisted?.selection ?? buildDefaultSelection()
+        }
+        if (version < 3) {
+          // 旧的全局 autoStartOnConnect 复制到每个平台作兜底底本，升级后各平台可各自改动
+          const globalAutoStart = persisted?.autoStartOnConnect ?? true
+          const autoStartLegacy: PerPlatformAutoStart = {}
+          for (const platform of ALL_PLATFORMS) {
+            autoStartLegacy[platform] = globalAutoStart
+          }
+          return {
+            ...persisted,
+            selection: { __platform: perPlatform },
+            autoStart: { __platform: autoStartLegacy },
+          }
         }
         return persisted as QuickStartStore
       },
@@ -124,10 +195,12 @@ const RESUMABLE_TASK_TO_KEY: Record<string, QuickStartKey> = {
 }
 
 /**
- * 断线现场：accountId -> 断线前还在运行的功能。
+ * 断线现场：accountId -> 断线前还在运行的功能 + 断线时的平台。
  * 断线时由 App 层的 disconnectedEvent 处理器写入，重连成功后消费一次即清空。
+ * 必须记平台：用户断线后切换平台再重连（同一账号），上个平台跑的任务
+ * 不能原样恢复到新平台上（历史上表现为「切平台后功能被代入」）。
  */
-const pendingResume = new Map<string, QuickStartKey[]>()
+const pendingResume = new Map<string, { keys: QuickStartKey[]; platform: LiveControlPlatform }>()
 
 /** 断线时记录现场（主进程会把仍在运行的任务类型带过来） */
 export function markDisconnectedTasks(accountId: string, taskTypes: string[]) {
@@ -135,15 +208,24 @@ export function markDisconnectedTasks(accountId: string, taskTypes: string[]) {
     .map(type => RESUMABLE_TASK_TO_KEY[type])
     .filter((key): key is QuickStartKey => Boolean(key))
   if (keys.length > 0) {
-    pendingResume.set(accountId, keys)
+    const platform = useLiveControlStore.getState().contexts[accountId]?.platform
+    if (platform) {
+      pendingResume.set(accountId, { keys, platform })
+    }
   }
 }
 
-/** 取出并清空现场 */
-function consumePendingResume(accountId: string): QuickStartKey[] {
-  const keys = pendingResume.get(accountId) ?? []
+/** 取出并清空现场（平台对不上则视为过期，不恢复） */
+function consumePendingResume(
+  accountId: string,
+  currentPlatform: LiveControlPlatform,
+): QuickStartKey[] {
+  const entry = pendingResume.get(accountId)
   pendingResume.delete(accountId)
-  return keys
+  if (!entry || entry.platform !== currentPlatform) {
+    return []
+  }
+  return entry.keys
 }
 
 /**
@@ -298,11 +380,15 @@ function useFeatureControls() {
 
 export function useQuickStart() {
   const platform = useCurrentLiveControl(context => context.platform)
-  const selection = useQuickStartStore(s => s.selection[platform] ?? DEFAULT_PER_PLATFORM)
-  const autoStartOnConnect = useQuickStartStore(s => s.autoStartOnConnect)
+  const { currentAccountId } = useAccounts()
+  const selection = useQuickStartStore(s =>
+    readQuickStartSelection(s.selection, currentAccountId, platform),
+  )
+  const autoStartOnConnect = useQuickStartStore(s =>
+    readQuickStartAutoStart(s.autoStart, currentAccountId, platform),
+  )
   const toggle = useQuickStartStore(s => s.toggle)
   const setAutoStartOnConnect = useQuickStartStore(s => s.setAutoStartOnConnect)
-  const { currentAccountId } = useAccounts()
   const { startByKey, stopByKey, getRunning, toast } = useFeatureControls()
 
   const startAll = useMemoizedFn(async () => {
@@ -386,11 +472,13 @@ export function useQuickStartAutoStart() {
   const isConnected = useCurrentLiveControl(context => context.isConnected)
   const platform = useCurrentLiveControl(context => context.platform)
   const { currentAccountId } = useAccounts()
-  const autoStartOnConnect = useQuickStartStore(s => s.autoStartOnConnect)
-  const selection = useQuickStartStore(s => s.selection)
+  const autoStartOnConnect = useQuickStartStore(s =>
+    readQuickStartAutoStart(s.autoStart, currentAccountId, platform),
+  )
+  const selectionMap = useQuickStartStore(s => s.selection)
   const { startByKey, toast } = useFeatureControls()
-  // 当前平台各自的勾选（不存在则回落到默认）
-  const platformSelection = selection[platform] ?? DEFAULT_PER_PLATFORM
+  // 当前账号 × 当前平台各自的勾选（无自己的数据则回落到 v2 按平台的遗留数据）
+  const platformSelection = readQuickStartSelection(selectionMap, currentAccountId, platform)
 
   const lastConnectedRef = useRef(false)
 
@@ -401,8 +489,8 @@ export function useQuickStartAutoStart() {
       lastConnectedRef.current = true
       if (currentAccountId) {
         const keys = new Set<QuickStartKey>()
-        // 断线前正在跑的，优先恢复现场
-        const resumed = consumePendingResume(currentAccountId)
+        // 断线前正在跑的，优先恢复现场（平台变了就不恢复，避免把上个平台的任务代入新平台）
+        const resumed = consumePendingResume(currentAccountId, platform)
         for (const key of resumed) {
           keys.add(key)
         }
@@ -430,5 +518,5 @@ export function useQuickStartAutoStart() {
     } else if (!connected) {
       lastConnectedRef.current = false
     }
-  }, [isConnected, autoStartOnConnect, currentAccountId, selection, startByKey, toast, platform])
+  }, [isConnected, autoStartOnConnect, currentAccountId, platformSelection, startByKey, toast, platform])
 }

@@ -1,7 +1,7 @@
 import { useMemoizedFn } from 'ahooks'
 import { PlayIcon, SquareIcon } from 'lucide-react'
 import React from 'react'
-import { openPricePlatforms, openPriceSelfDetectPlatforms } from '@/abilities'
+import { openPricePlatforms, openPriceSelfDetectPlatforms, platformLabels } from '@/abilities'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -18,6 +18,8 @@ import {
   QUICK_START_LABELS,
   QUICK_START_SUPPORTED_PLATFORMS,
   type QuickStartKey,
+  readQuickStartAutoStart,
+  readQuickStartSelection,
   useQuickStart,
   useQuickStartStore,
 } from '@/hooks/useQuickStart'
@@ -31,12 +33,14 @@ const ALL_KEYS: QuickStartKey[] = ['autoMessage', 'autoPopUp', 'autoReply', 'ope
 /** 单个功能：勾选框 + 实时运行状态 */
 const FeatureCheckbox = React.memo(
   ({
+    accountId,
     platform,
     featureKey,
     running,
     error,
     note,
   }: {
+    accountId: string
     platform: LiveControlPlatform
     featureKey: QuickStartKey
     running: boolean
@@ -45,7 +49,10 @@ const FeatureCheckbox = React.memo(
     /** 传了表示该平台不能在此启动，只展示说明，勾选框禁用 */
     note?: string
   }) => {
-    const checked = useQuickStartStore(s => s.selection[platform]?.[featureKey] ?? false)
+    // 「账号 × 平台」双重隔离：同一平台不同账号各记一份，切平台/切账号互不代入
+    const checked = useQuickStartStore(s =>
+      Boolean(readQuickStartSelection(s.selection, accountId, platform)[featureKey]),
+    )
     const toggle = useQuickStartStore(s => s.toggle)
     const isConnected = useCurrentLiveControl(context => context.isConnected)
     const disabled = Boolean(note)
@@ -57,10 +64,10 @@ const FeatureCheckbox = React.memo(
             id={`quick-start-${platform}-${featureKey}`}
             checked={disabled ? false : checked}
             disabled={disabled}
-            onCheckedChange={v => toggle(platform, featureKey, Boolean(v))}
+            onCheckedChange={v => toggle(accountId, platform, featureKey, Boolean(v))}
           />
           <Label
-            htmlFor={`quick-start-${featureKey}`}
+            htmlFor={`quick-start-${platform}-${featureKey}`}
             className={cn('text-sm', disabled ? 'text-muted-foreground' : 'cursor-pointer')}
           >
             {QUICK_START_LABELS[featureKey]}
@@ -89,12 +96,28 @@ const FeatureCheckbox = React.memo(
   },
 )
 
+/** 「连接后自动开启」开关：按「账号 × 平台」各自记忆，切平台/账号互不代入 */
+const AutoStartSwitch = React.memo(
+  ({ accountId, platform }: { accountId: string; platform: LiveControlPlatform }) => {
+    const checked = useQuickStartStore(s =>
+      readQuickStartAutoStart(s.autoStart, accountId, platform),
+    )
+    const setAutoStartOnConnect = useQuickStartStore(s => s.setAutoStartOnConnect)
+    return (
+      <Switch
+        checked={checked}
+        onCheckedChange={v => setAutoStartOnConnect(accountId, platform, v)}
+      />
+    )
+  },
+)
+
 const QuickStartCard = React.memo(() => {
   const isConnected = useCurrentLiveControl(context => context.isConnected)
   const platform = useCurrentLiveControl(context => context.platform)
-  const { currentAccountId } = useAccounts()
-  const { selection, autoStartOnConnect, setAutoStartOnConnect, startAll, stopAll } =
-    useQuickStart()
+  const { currentAccountId, accounts } = useAccounts()
+  const accountName = accounts.find(acc => acc.id === currentAccountId)?.name
+  const { selection, startAll, stopAll } = useQuickStart()
   const [busy, setBusy] = React.useState(false)
 
   const isAutoMessageRunning = useCurrentAutoMessage(context => context.isRunning)
@@ -150,6 +173,12 @@ const QuickStartCard = React.memo(() => {
         <CardDescription>
           勾选开播后要启动的功能，连接中控台后会自动开启，也可以随时手动一键开启/停止
         </CardDescription>
+        {/* 勾选按「账号 × 平台」隔离，标明当前作用对象，避免误以为切平台/账号后状态串了 */}
+        <div className="text-xs text-muted-foreground">
+          当前：{platformLabels[platform]}
+          {accountName ? ` · ${accountName}` : ''}
+          （各平台、各账号的勾选相互独立）
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
@@ -157,6 +186,7 @@ const QuickStartCard = React.memo(() => {
             {displayKeys.map(key => (
               <FeatureCheckbox
                 key={key}
+                accountId={currentAccountId}
                 platform={platform}
                 featureKey={key}
                 running={runningMap[key]}
@@ -174,10 +204,10 @@ const QuickStartCard = React.memo(() => {
             <div>
               <div className="text-sm">连接后自动开启</div>
               <div className="text-muted-foreground text-xs">
-                连接到中控台后，自动开启上面勾选的功能
+                连接到中控台后，自动开启上面勾选的功能（按账号 × 平台各自记忆）
               </div>
             </div>
-            <Switch checked={autoStartOnConnect} onCheckedChange={setAutoStartOnConnect} />
+            <AutoStartSwitch accountId={currentAccountId} platform={platform} />
           </div>
 
           <Separator />
