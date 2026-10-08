@@ -9,7 +9,8 @@
   "publish": {
     "provider": "github",
     "owner": "wenyan111",
-    "repo": "livedeck"
+    "repo": "livedeck",
+    "releaseType": "release"
   },
   "electronLanguages": ["zh-CN", "en-US"],
   "files": ["dist-electron", "dist", "!**/fsevents/**"],
