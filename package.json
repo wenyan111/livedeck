@@ -1,10 +1,10 @@
 {
-  "name": "oba-live-tool",
+  "name": "livedeck",
   "type": "module",
-  "version": "1.7.13",
+  "version": "1.0.1",
   "private": true,
   "description": "直播工具，用于直播带货，能自动弹窗，自动发言",
-  "author": "qiutongxue",
+  "author": "wenyan111",
   "license": "MIT",
   "main": "dist-electron/main/index.js",
   "debug": {

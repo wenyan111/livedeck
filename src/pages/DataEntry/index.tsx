@@ -777,9 +777,6 @@ export default function DataEntry() {
       <Card>
         <CardHeader>
           <CardTitle>视觉识别模型</CardTitle>
-          <CardDescription>
-            用于从截图中识别直播数据。建议智谱 glm-4v-plus（你之前用的 flash 准度较低）
-          </CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">

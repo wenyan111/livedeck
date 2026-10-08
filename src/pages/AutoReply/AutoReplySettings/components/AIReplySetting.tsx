@@ -1,4 +1,5 @@
-import { useId } from 'react'
+import { useLocalStorageState, useMemoizedFn } from 'ahooks'
+import { useEffect, useId, useRef } from 'react'
 import AIModelInfo from '@/components/ai-chat/AIModelInfo'
 import { APIKeyDialog } from '@/components/ai-chat/APIKeyDialog'
 import { Label } from '@/components/ui/label'
@@ -10,6 +11,36 @@ export function AIReplySetting() {
   const { config, updateAIReplySettings } = useAutoReplyConfig()
   const aiReplyEnabled = config.comment.aiReply.enable
   const autoSend = config.comment.aiReply.autoSend
+
+  // 记住提示词输入框被手动拖拽后的高度：拖高一次，之后每次进入都保持同一高度，
+  // 不用再「拉开」才能看全提示词
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const [promptHeight, setPromptHeight] = useLocalStorageState<number>('ai-reply-prompt-height', {
+    defaultValue: 0,
+  })
+
+  const savePromptHeight = useMemoizedFn(() => {
+    const el = promptRef.current
+    if (!el) return
+    const h = Math.round(el.offsetHeight)
+    setPromptHeight(prev => (prev === h ? prev : h))
+  })
+
+  // 应用记忆的高度
+  useEffect(() => {
+    const el = promptRef.current
+    if (!el) return
+    el.style.height = promptHeight > 0 ? `${promptHeight}px` : ''
+  }, [promptHeight, aiReplyEnabled])
+
+  // textarea 拖拽改高不会派发 resize 事件，用 ResizeObserver 捕获
+  useEffect(() => {
+    const el = promptRef.current
+    if (!el || !aiReplyEnabled) return
+    const observer = new ResizeObserver(savePromptHeight)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [aiReplyEnabled, savePromptHeight])
   // 处理AI自动回复开关
   const handleAiReplyChange = (checked: boolean) => {
     updateAIReplySettings({ enable: checked })
@@ -59,6 +90,7 @@ export function AIReplySetting() {
         <div className="space-y-4">
           <div className="flex items-center space-x-2">提示词配置</div>
           <Textarea
+            ref={promptRef}
             placeholder="输入AI提示词..."
             value={config.comment.aiReply.prompt}
             onChange={e => updateAIReplySettings({ prompt: e.target.value })}

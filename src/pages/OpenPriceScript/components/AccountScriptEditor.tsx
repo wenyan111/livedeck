@@ -1,6 +1,5 @@
-import { useMemoizedFn } from 'ahooks'
+import { useLocalStorageState, useMemoizedFn } from 'ahooks'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -19,7 +18,11 @@ const EMPTY_MESSAGES: Message[] = []
  * 而不是切账号再去顶部的话术列表里填。
  */
 export default function AccountScriptEditor({ accountId }: { accountId: string }) {
-  const [open, setOpen] = useState(false)
+  // 展开状态按账号持久化（localStorage），展开后下次进入仍保持，
+  // 不用每次都手动拉开才能看全部配置话术
+  const [open, setOpen] = useLocalStorageState<boolean>(`open-price-script-editor:${accountId}`, {
+    defaultValue: false,
+  })
   // 只取原始引用（可能为 undefined），保证引用稳定
   const messages = useOpenPriceScriptStore(state => state.contexts[accountId]?.config.messages)
   const list = messages ?? EMPTY_MESSAGES

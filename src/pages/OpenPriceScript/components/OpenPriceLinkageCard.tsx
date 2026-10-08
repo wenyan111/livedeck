@@ -133,7 +133,7 @@ export default function OpenPriceLinkageCard() {
             <CardTitle>跨平台开价联动</CardTitle>
             <CardDescription>
               触发源检测到开价后，自动带动其他平台一起发各自配置的开价话术。
-              每个平台的话术在下方各自的「开价话术」里填写，触发源自身需先在本页开启开价监听才会产生联动
+              每个平台的话术在下方各自的「开价话术」里填写。开启联动后，触发源账号连上中控台会自动拉起开价监听，无需每次手动点「开启监听」。
             </CardDescription>
           </div>
           <Switch checked={config.enabled} onCheckedChange={handleToggleEnabled} />
@@ -175,7 +175,7 @@ export default function OpenPriceLinkageCard() {
                       ? '监听中：检测到开价会自动带动其他平台'
                       : sourceError
                         ? sourceError
-                        : '未开启监听：检测到开价后不会联动，需先开启'}
+                        : '未开启监听：连接中控台后会由联动自动拉起'}
                   </span>
                 </div>
                 <Button

@@ -60,8 +60,11 @@ export class XiaohongshuPlatform
 
   async getAccountName(session: BrowserSession) {
     const accountName = await getAccountName(session.page, SELECTORS.ACCOUNT_NAME)
-    if (accountName?.endsWith('的店')) {
-      this.accountName = accountName.slice(0, -2)
+    // 店铺名常以「的店」结尾，展示时去掉后缀；但赋值必须放在 if 外——
+    // 否则不以「的店」结尾的账号会一直拿到空名字，导致「主播评论」判定与
+    // 「仅用户评论」过滤全部失效（表现为机器人回复到自己的评论上）。
+    if (accountName) {
+      this.accountName = accountName.endsWith('的店') ? accountName.slice(0, -2) : accountName
     }
     return this.accountName
   }

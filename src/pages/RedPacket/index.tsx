@@ -1,10 +1,10 @@
+import { Send } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import { Title } from '@/components/common/Title'
-import { CarbonPlayFilledAlt } from '@/components/icons/carbon'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -199,7 +199,7 @@ export default function RedPacket() {
               disabled={isConnected !== 'connected' || isSending || isCoolingDown}
               size="lg"
             >
-              <CarbonPlayFilledAlt className="mr-2 h-4 w-4" />
+              <Send className="mr-2 h-4 w-4" />
               {buttonLabel}
             </Button>
           </div>

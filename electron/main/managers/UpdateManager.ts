@@ -13,6 +13,7 @@ import windowManager from '#/windowManager'
 import packageJson from '../../../package.json'
 import { createLogger } from '../logger'
 import { errorMessage, sleep } from '../utils'
+import { UPDATE_SOURCE } from 'shared/updateSource'
 
 type LatestYml = {
   version: string
@@ -26,8 +27,7 @@ type LatestYml = {
   releaseDate: string
 }
 
-const GITHUB_OWNER = 'qiutongxue'
-const GITHUB_REPO = 'oba-live-tool'
+// 更新源（GitHub owner/repo/branch）统一由 shared/updateSource.ts 的 UPDATE_SOURCE 配置
 const CDN_URL = 'https://fastly.jsdelivr.net/gh/'
 const PRODUCT_NAME = packageJson.name
 
@@ -105,16 +105,23 @@ let latestVersion: string | null = null
 async function getLatestVersion() {
   try {
     // 从 package.json 获取最新版本号
-    const version = await fetch(
-      new URL(`${GITHUB_OWNER}/${GITHUB_REPO}@main/package.json`, CDN_URL),
+    const resp = await fetch(
+      new URL(`${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/package.json`, CDN_URL),
     )
-      .then(resp => resp.json())
-      .then(data => data.version)
+    // 更新源仓库尚未创建/发布时，CDN 会返回 404 + 一段 "Couldn't find ..." 文本；
+    // 必须先判 ok，否则 resp.json() 会因非 JSON 抛出 "Unexpected token" 的误导性错误
+    if (!resp.ok) {
+      logger.debug(
+        `更新源仓库暂不可用（HTTP ${resp.status}）：${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}，跳过本次更新检查`,
+      )
+      return null
+    }
+    const version = (await resp.json()).version
     logger.debug(`从 package.json 获取到的版本为 ${version}`)
     latestVersion = version
     return version
   } catch (error) {
-    logger.error('获取最新版本失败', error)
+    logger.debug(`获取最新版本失败：${errorMessage(error)}`)
     return null
   }
 }
@@ -125,7 +132,7 @@ async function fetchChangelog() {
   }
   try {
     // 去 CDN 找
-    const changelogURL = new URL(`${GITHUB_OWNER}/${GITHUB_REPO}@main/CHANGELOG.md`, CDN_URL)
+    const changelogURL = new URL(`${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/CHANGELOG.md`, CDN_URL)
     const changelogContent = await fetchWithRetry(changelogURL).then(res => res?.text())
     if (changelogContent) {
       // 找到新版本到当前版本的所有更新日志
@@ -143,7 +150,7 @@ async function fetchChangelog() {
 }
 
 function getAssetsURL() {
-  const assetsURL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${latestVersion}/`
+  const assetsURL = `https://github.com/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/releases/download/v${latestVersion}/`
   return assetsURL
 }
 
@@ -269,8 +276,8 @@ class WindowsUpdater implements Updater {
     this.autoUpdater.requestHeaders = null
     this.autoUpdater.setFeedURL({
       provider: 'github',
-      owner: GITHUB_OWNER,
-      repo: GITHUB_REPO,
+      owner: UPDATE_SOURCE.owner,
+      repo: UPDATE_SOURCE.repo,
     })
     return this.autoUpdater.checkForUpdates()
   }
@@ -355,12 +362,18 @@ class MacOSUpdater implements Updater {
       this.safeSource = source === 'github' ? '' : new URL(source).href
       this.assetsURL = assetsURL
       const latestYmlURL = `${this.safeSource}${new URL('latest-mac.yml', this.assetsURL)}`
-      const ymlContent = (await net.fetch(latestYmlURL).then(res => res.text())) as string
-      const latestYml = yaml.parse(ymlContent) as LatestYml
+      const ymlResp = await net.fetch(latestYmlURL)
+      // 更新源仓库尚未发布时这里会拿到 404 的说明文本，直接 parse 会产出无 version 的字符串再触发 semver 报错
+      if (!ymlResp.ok) {
+        logger.debug(`获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源仓库可能尚未发布`)
+        return
+      }
+      const ymlContent = (await ymlResp.text()) as string
+      const latestYml = yaml.parse(ymlContent) as LatestYml | null
 
-      if (!latestYml) {
-        const message = '获取文件更新信息失败'
-        throw new Error(message)
+      if (!latestYml || typeof latestYml.version !== 'string') {
+        logger.debug('未获取到有效的更新信息（更新源仓库可能尚未发布），跳过本次更新')
+        return
       }
       this.versionInfo = latestYml
       if (semver.lt(latestYml.version, app.getVersion())) {
@@ -385,7 +398,7 @@ class MacOSUpdater implements Updater {
         throw new Error(message)
       }
       // 先检查本地是否已经有了这个文件（计算 Sha512）
-      this.savePath = path.join(app.getPath('downloads'), 'oba-update-setup.dmg')
+      this.savePath = path.join(app.getPath('downloads'), 'livedeck-update-setup.dmg')
       if (existsSync(this.savePath)) {
         const localFileSha512 = await this.calculateFileHash(this.savePath)
         logger.debug(`检测到本地文件，计算 Sha512 哈希值为 ${localFileSha512}`)

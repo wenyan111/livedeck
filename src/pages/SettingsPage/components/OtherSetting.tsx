@@ -1,5 +1,6 @@
 import { BugIcon, ExternalLinkIcon, FileTextIcon, Trash2Icon } from 'lucide-react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import { UPDATE_SOURCE } from 'shared/updateSource'
 import { SimpleIconsGithub } from '@/components/icons/simpleIcons'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,14 +17,14 @@ export function OtherSetting() {
   const handleOpenGitHub = async () => {
     await window.ipcRenderer.invoke(
       IPC_CHANNELS.app.openExternal,
-      'https://github.com/qiutongxue/oba-live-tool',
+      `https://github.com/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}`,
     )
   }
 
   const handleOpenIssues = async () => {
     await window.ipcRenderer.invoke(
       IPC_CHANNELS.app.openExternal,
-      'https://github.com/qiutongxue/oba-live-tool/issues',
+      `https://github.com/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/issues`,
     )
   }
 

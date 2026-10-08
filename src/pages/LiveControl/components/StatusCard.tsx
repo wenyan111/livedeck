@@ -1,5 +1,5 @@
 import { useMemoizedFn } from 'ahooks'
-import { CheckIcon, CircleAlert, GlobeIcon, XIcon } from 'lucide-react'
+import { Activity, CheckIcon, CircleAlert, GlobeIcon, XIcon } from 'lucide-react'
 import React, { useState } from 'react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -61,7 +61,10 @@ const StatusCard = React.memo(() => {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>控制台状态</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-brand" />
+          控制台状态
+        </CardTitle>
         <CardDescription>查看并管理直播控制台的连接状态</CardDescription>
       </CardHeader>
       <CardContent>

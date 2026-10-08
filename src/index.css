@@ -25,6 +25,11 @@
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
 
+  /* 品牌强调色（暖珊瑚）：只用于活跃态/开关/选中/链接。
+     注意：不要覆盖 --accent（那是 shadcn 的 hover 背景 token），否则所有 hover 会变珊瑚。 */
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
 
@@ -87,6 +92,8 @@
     --muted-foreground: 215.4 16.3% 46.9%;
     --accent: 210 40% 96.1%;
     --accent-foreground: 222.2 47.4% 11.2%;
+    --brand: 14 100% 52%;
+    --brand-foreground: 0 0% 100%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
     --success: 142 71% 45%;
@@ -130,6 +137,9 @@
     --muted-foreground: 0 0% 58%;
     --accent: 0 0% 15%;
     --accent-foreground: 0 0% 92%;
+    /* 暖珊瑚品牌色：深色背景上用稍亮的一档 */
+    --brand: 14 100% 64%;
+    --brand-foreground: 20 90% 8%;
     --destructive: 0 55% 38%;
     --destructive-foreground: 0 0% 98%;
     --success: 142 64% 48%;

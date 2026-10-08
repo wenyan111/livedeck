@@ -55,3 +55,6 @@ dmg_mount.txt
 *-source.tar.gz
 oba-live-tool*.exe
 oba-live-tool*.dmg
+LiveDeck*.exe
+LiveDeck*.dmg
+LiveDeck*.tar.gz

@@ -101,10 +101,29 @@ export class XiaohongshuCommentListener {
   private client: CDPSession | null = null
   private accountName = ''
   private handleComment: (comment: LiveMessage) => void = () => {}
+  /**
+   * 我们自己的 user_id：从「发送评论」响应里学到。
+   * 小红书会把客服/主播自己发出去的消息也通过 WebSocket 回推一次，
+   * 必须靠它把「自己发的」从评论流里剔除，否则机器人会把自己的回复
+   * 当成观众评论，陷入「自问自答」死循环（历史上表现为几秒一轮刷屏）。
+   */
+  private selfUserId: string | null = null
+  /**
+   * 自己刚发出去的评论内容 + 时间。作为 user_id 之外的兜底：
+   * 万一回推的消息没带 user_id（或 id 体系对不上），用「内容 + 时间窗」也能认出来自回声。
+   */
+  private recentlySent: { content: string; at: number }[] = []
 
   constructor(private page: Page) {
     this.handleWebSocketResponse = this.handleWebSocketResponse.bind(this)
     this.handleResponse = this.handleResponse.bind(this)
+  }
+
+  /** 判断一条消息是不是我们自己发出去、又被回推回来的 */
+  private isSelfEcho(desc: string, userId: string | undefined): boolean {
+    if (this.selfUserId && userId && userId === this.selfUserId) return true
+    const now = Date.now()
+    return this.recentlySent.some(m => m.content === desc && now - m.at < 120_000)
   }
 
   private async getCDPSession() {
@@ -123,21 +142,32 @@ export class XiaohongshuCommentListener {
     this.page.on('response', this.handleResponse)
   }
 
+  /**
+   * 「发送评论」接口的响应。
+   * 注意：这里是我们**主动发出**的评论，不是观众评论，绝不能推给界面 / 自动回复
+   * （否则会触发自我回复死循环）。只用来①记下自己的 user_id ②记下刚发出的内容，
+   * 供后续把 WebSocket 回推的自己消息过滤掉。
+   */
   private async handleResponse(response: Response) {
     const url = response.url()
     if (!url.includes('send_comment')) return
-    const respJson = (await response.json()) as XiaohongshuSendCommentResponse
-    if (respJson.success) {
-      const data = respJson.data
-      const liveMessage: LiveMessage = {
-        msg_type: 'xiaohongshu_comment',
-        msg_id: crypto.randomUUID(), // 主动发送的没有 commentId
-        nick_name: this.accountName ?? '',
-        user_id: data.profile.user_id,
-        content: data.comment,
-        time: Date.now(),
-      }
-      this.handleComment(liveMessage)
+    let respJson: XiaohongshuSendCommentResponse
+    try {
+      respJson = (await response.json()) as XiaohongshuSendCommentResponse
+    } catch {
+      return
+    }
+    if (!respJson.success) return
+    const data = respJson.data
+    if (data?.profile?.user_id) {
+      this.selfUserId = data.profile.user_id
+    }
+    const content = data?.comment ?? ''
+    if (content) {
+      const now = Date.now()
+      this.recentlySent.push({ content, at: now })
+      // 只保留最近 2 分钟的记录，避免无限增长
+      this.recentlySent = this.recentlySent.filter(m => now - m.at < 120_000)
     }
   }
 
@@ -149,6 +179,9 @@ export class XiaohongshuCommentListener {
     contentArray.forEach(content => {
       const commentMessage = this.parseWsContent(content)
       if (!commentMessage) return
+      // 把「自己发出去、又被回推回来」的消息丢掉：
+      // 它 nick_name 常为空 / 与店铺名不一致，光靠昵称判断兜不住，会导致自我回复死循环。
+      if (this.isSelfEcho(commentMessage.desc, commentMessage.profile?.user_id)) return
       const liveMessage: LiveMessage = {
         msg_type: 'xiaohongshu_comment',
         msg_id: commentMessage.commentId,

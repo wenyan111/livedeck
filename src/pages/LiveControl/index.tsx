@@ -10,7 +10,7 @@ export default function BrowserControl() {
         <Title title="直播控制台" description="连接并管理您的直播控制台" />
       </div>
 
-      <div className="space-y-8">
+      <div className="space-y-5">
         <StatusCard />
         <QuickStartCard />
         <InstructionsCard />

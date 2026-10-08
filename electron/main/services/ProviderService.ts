@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app } from 'electron'
 import { providers as defaultProviders } from 'shared/providers'
+import { UPDATE_SOURCE } from 'shared/updateSource'
 import { emitter } from '#/event/eventBus'
 import { createLogger } from '#/logger'
 
@@ -10,9 +11,9 @@ import { createLogger } from '#/logger'
  * 修改这里可切换数据源仓库。
  */
 const REPO_INFO = {
-  owner: 'qiutongxue',
-  name: 'oba-live-tool',
-  branch: 'main',
+  owner: UPDATE_SOURCE.owner,
+  name: UPDATE_SOURCE.repo,
+  branch: UPDATE_SOURCE.branch,
   file: 'providers.json',
 }
 
@@ -81,8 +82,9 @@ export class ProviderService {
       }
     }
 
-    this.logger.error(
-      `所有 CDN 源均获取失败 (${errors.length}/${PROVIDER_URLS.length})，将使用本地数据`,
+    // 全部源失败属正常降级（如自有仓库尚未发布），已回退本地/内置配置，降级为 WARN 避免误导性报错
+    this.logger.warn(
+      `所有 CDN 源均获取失败 (${errors.length}/${PROVIDER_URLS.length})，已回退到本地/内置配置`,
     )
   }
 }

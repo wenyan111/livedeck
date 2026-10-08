@@ -489,13 +489,18 @@ export function useQuickStartAutoStart() {
       lastConnectedRef.current = true
       if (currentAccountId) {
         const keys = new Set<QuickStartKey>()
-        // 断线前正在跑的，优先恢复现场（平台变了就不恢复，避免把上个平台的任务代入新平台）
-        const resumed = consumePendingResume(currentAccountId, platform)
-        for (const key of resumed) {
-          keys.add(key)
-        }
-        // 再叠加「连接后自动开启」的勾选项（按当前平台各自的勾选）
+        let resumedCount = 0
+        // 「连接后自动开启」总闸：关闭时连上中控台什么都不自动开，
+        // 连「断线自动恢复」也听这个开关——否则断线重连会把之前在跑的功能原样全拉起来，
+        // 与开关语义矛盾（历史上表现为「开关关了却连接后自动全开」）。
         if (autoStartOnConnect) {
+          // 断线前正在跑的，优先恢复现场（平台变了就不恢复，避免把上个平台的任务代入新平台）
+          const resumed = consumePendingResume(currentAccountId, platform)
+          resumedCount = resumed.length
+          for (const key of resumed) {
+            keys.add(key)
+          }
+          // 再叠加「连接后自动开启」的勾选项（按当前平台各自的勾选）
           for (const key of Object.keys(platformSelection) as QuickStartKey[]) {
             if (platformSelection[key]) {
               keys.add(key)
@@ -511,7 +516,7 @@ export function useQuickStartAutoStart() {
               results.push(await startByKey[key](currentAccountId))
             }
             // 断线恢复和「自动开启」可能同时命中，统一按「开启」提示即可
-            reportResults(toast, results, resumed.length > 0 ? '恢复' : '开启')
+            reportResults(toast, results, resumedCount > 0 ? '恢复' : '开启')
           })()
         }
       }

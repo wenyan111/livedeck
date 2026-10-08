@@ -1,6 +1,6 @@
 import { useDebounceFn } from 'ahooks'
+import { Play, Square } from 'lucide-react'
 import { useCurrentLiveControl } from '@/hooks/useLiveControl'
-import { CarbonPlayFilledAlt, CarbonStopFilledAlt } from '../icons/carbon'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
@@ -34,12 +34,13 @@ export function TaskButton({
             >
               {isTaskRunning ? (
                 <>
-                  <CarbonStopFilledAlt className="mr-2 h-4 w-4" />
+                  {/* 主操作图标保留实心（fill-current），与常规线性图标区分层级 */}
+                  <Square className="mr-2 h-4 w-4 fill-current" />
                   停止任务
                 </>
               ) : (
                 <>
-                  <CarbonPlayFilledAlt className="mr-2 h-4 w-4" />
+                  <Play className="mr-2 h-4 w-4 fill-current" />
                   开始任务
                 </>
               )}

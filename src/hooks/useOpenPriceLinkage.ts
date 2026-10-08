@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/useToast'
 import { useAccounts } from './useAccounts'
 import { useLiveControlStore } from './useLiveControl'
 import { buildOpenPriceSendMessages, useOpenPriceScriptStore } from './useOpenPriceScript'
+import { readQuickStartAutoStart, useQuickStartStore } from './useQuickStart'
 
 /** 自身能检测开价的平台，这些平台参与联动时可以选择停用自身检测 */
 export const SELF_WATCH_PLATFORMS: LiveControlPlatform[] = openPriceSelfDetectPlatforms
@@ -363,7 +364,7 @@ export function useOpenPriceLinkageGlobal() {
     [accounts, contexts],
   )
 
-  const { fanout } = useOpenPriceLinkage({
+  const { fanout, startWatcher, applySelfWatchPolicy } = useOpenPriceLinkage({
     accountNames,
     accountPlatforms,
     accountConnected,
@@ -382,4 +383,38 @@ export function useOpenPriceLinkageGlobal() {
     )
     return off
   }, [fanout])
+
+  /**
+   * 联动「自恢复」：开启联动后，触发源账号一旦连上中控台就自动拉起它自己的开价监听
+   * （这是联动真正生效的前提——监听没起，主进程就不会广播 warmup，整条联动等于没通电）。
+   * 同时按配置重跑一次「停用自身检测」策略：重连后跟随平台的自身监听可能被其它入口
+   * （如一键开启的「开价话术」）拉起，必须按联动配置停掉，避免一条开价被发两次。
+   * 这样重连 / 重装后，用户只需连上中控台，联动就自动接管，不必再手动点「开启监听」。
+   *
+   * 注意：只在「未运行」时才拉起，已运行则跳过，避免重复发 IPC；
+   * 未配置话术时不拉起，避免启动时弹「未配置开价话术」报错。
+   */
+  const config = useOpenPriceLinkageStore(state => state.config)
+  useEffect(() => {
+    const sourceId = config.sourceAccountId
+    if (!config.enabled || !sourceId) return
+    if (!accountConnected[sourceId]) return
+    const runtime = useOpenPriceScriptStore.getState().runtime[sourceId]
+    const sourcePlatform = accountPlatforms[sourceId]
+    // 「连接后自动开启」总闸：关闭时，连上中控台也不自动拉起触发源的开价监听
+    // （否则联动会绕开关在连接瞬间擅自启动开价话术，与开关语义矛盾）。
+    // 注意这里只卡「自动拉起」，用户手动在开价话术页点开启仍可正常启动。
+    const autoStartAllowed =
+      !sourcePlatform ||
+      readQuickStartAutoStart(useQuickStartStore.getState().autoStart, sourceId, sourcePlatform)
+    if (!runtime?.isRunning && autoStartAllowed) {
+      const messages = useOpenPriceScriptStore.getState().contexts[sourceId]?.config.messages ?? []
+      if (messages.some(m => m.content.trim() !== '')) {
+        void startWatcher(sourceId)
+      }
+    }
+    // 无论是否刚拉起，都按最新配置应用「停用自身检测」策略
+    // （防止触发源监听在跑时，跟随平台自身检测重复发；该策略只停跟随端、不自动启动任何监听）
+    void applySelfWatchPolicy()
+  }, [config.enabled, config.sourceAccountId, accountConnected, accountPlatforms, startWatcher, applySelfWatchPolicy])
 }

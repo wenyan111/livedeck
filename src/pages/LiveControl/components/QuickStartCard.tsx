@@ -1,5 +1,5 @@
 import { useMemoizedFn } from 'ahooks'
-import { PlayIcon, SquareIcon } from 'lucide-react'
+import { PlayIcon, SquareIcon, ZapIcon } from 'lucide-react'
 import React from 'react'
 import { openPricePlatforms, openPriceSelfDetectPlatforms, platformLabels } from '@/abilities'
 import { Button } from '@/components/ui/button'
@@ -169,7 +169,10 @@ const QuickStartCard = React.memo(() => {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>一键开启</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <ZapIcon className="h-4 w-4 text-brand" />
+          一键开启
+        </CardTitle>
         <CardDescription>
           勾选开播后要启动的功能，连接中控台后会自动开启，也可以随时手动一键开启/停止
         </CardDescription>
@@ -182,36 +185,7 @@ const QuickStartCard = React.memo(() => {
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {displayKeys.map(key => (
-              <FeatureCheckbox
-                key={key}
-                accountId={currentAccountId}
-                platform={platform}
-                featureKey={key}
-                running={runningMap[key]}
-                error={key === 'openPrice' ? openPriceError : undefined}
-                note={
-                  key === 'openPrice' && !isOpenPriceStartable
-                    ? '由跨平台联动触发，无需启动'
-                    : undefined
-                }
-              />
-            ))}
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm">连接后自动开启</div>
-              <div className="text-muted-foreground text-xs">
-                连接到中控台后，自动开启上面勾选的功能（按账号 × 平台各自记忆）
-              </div>
-            </div>
-            <AutoStartSwitch accountId={currentAccountId} platform={platform} />
-          </div>
-
-          <Separator />
-
+          {/* 操作区置顶：一键开启/停止 + 连接后自动开启开关（原在卡片底部，按用户要求上移） */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">
               {connected
@@ -238,6 +212,36 @@ const QuickStartCard = React.memo(() => {
                 </>
               )}
             </Button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm">连接后自动开启</div>
+              <div className="text-muted-foreground text-xs">
+                连接到中控台后，自动开启下方勾选的功能（按账号 × 平台各自记忆）
+              </div>
+            </div>
+            <AutoStartSwitch accountId={currentAccountId} platform={platform} />
+          </div>
+
+          <Separator />
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {displayKeys.map(key => (
+              <FeatureCheckbox
+                key={key}
+                accountId={currentAccountId}
+                platform={platform}
+                featureKey={key}
+                running={runningMap[key]}
+                error={key === 'openPrice' ? openPriceError : undefined}
+                note={
+                  key === 'openPrice' && !isOpenPriceStartable
+                    ? '由跨平台联动触发，无需启动'
+                    : undefined
+                }
+              />
+            ))}
           </div>
         </div>
       </CardContent>

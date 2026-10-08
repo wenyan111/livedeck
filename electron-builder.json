@@ -1,9 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.qbw.obalivetool",
+  "appId": "com.wenyan111.livedeck",
+  "productName": "LiveDeck・直播台",
   "asar": true,
   "directories": {
     "output": "release/${version}"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "wenyan111",
+    "repo": "livedeck"
   },
   "electronLanguages": ["zh-CN", "en-US"],
   "files": ["dist-electron", "dist", "!**/fsevents/**"],
