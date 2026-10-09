@@ -1,0 +1,73 @@
+name: Release Windows
+
+# 触发：打 v* tag 并 push，或在 Actions 页手动触发（workflow_dispatch）
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 注意：本 workflow 必须在“已 push 到 GitHub 的仓库”里才会运行。
+# 当前源码仓库 oba-tool 尚未配置 remote，请先 `git remote add` + `git push` 才能触发 CI。
+permissions:
+  contents: write
+
+jobs:
+  release-win:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: install dependencies
+        run: pnpm install
+
+      # 构建 Windows NSIS 安装包。
+      # - CSC_IDENTITY_AUTO_DISCOVERY=false：没配证书时打未签名包也不报错；
+      #   一旦配置了下面两个 secret，electron-builder 会自动用其对 NSIS 做 Authenticode 签名。
+      # - 在 windows-latest runner 上是“原生”打 NSIS，不需要 wine（wine 只在 macOS/Linux 上打 win 时才需要）。
+      - name: build windows installer
+        run: pnpm build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK: ${{ secrets.WINDOWS_CODESIGN_PFX }}        # Authenticode 证书 .pfx 的 base64（含私钥）
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}  # 证书导出密码
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 提取 changelog 里当前版本的内容，作为 release 说明
+      - name: Extract changelog
+        id: changelog
+        run: |
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          node scripts/extract-changelog.js >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 把 Windows 资产（exe + blockmap + latest.yml）上传到“发布仓库” wenyan111/livedeck，
+      # 这样应用内 UpdateManager（WindowsUpdater 走 electron-updater 读 latest.yml）才能拉到更新。
+      # 需要名为 RELEASE_TOKEN 的 secret：对 wenyan111/livedeck 有 contents:write 权限的 PAT
+      # （classic token 勾 repo，或 fine-grained token 勾该仓库 Contents:read&write）。
+      # 若本 workflow 所在仓库“就是” wenyan111/livedeck，可删掉下面的 repository 字段，并改用默认 GITHUB_TOKEN。
+      - name: Upload to livedeck release (wenyan111/livedeck)
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: wenyan111/livedeck
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.notes }}
+          files: |
+            release/*/*.exe
+            release/*/*.blockmap
+            release/*/latest.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
