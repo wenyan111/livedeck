@@ -1,10 +1,8 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream, existsSync, unlinkSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { arch, platform } from 'node:os'
 import path from 'node:path'
 import { app, net, shell } from 'electron'
-import type { AppUpdater, ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
 import { marked } from 'marked'
 import semver from 'semver'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
@@ -211,138 +209,128 @@ class UpdateManager {
 }
 
 class WindowsUpdater implements Updater {
-  private autoUpdater: AppUpdater
-  constructor() {
-    const { autoUpdater }: { autoUpdater: AppUpdater } = createRequire(import.meta.url)(
-      'electron-updater',
-    )
-    this.autoUpdater = autoUpdater
-    this.configureUpdater()
-    this.registerEventListener()
-  }
+  private versionInfo: LatestYml | null = null
+  private assetsURL: string | null = null
+  private savePath: string | null = null
+  private safeSource = ''
 
-  private configureUpdater() {
-    this.autoUpdater.forceDevUpdateConfig = true
-    this.autoUpdater.disableWebInstaller = false
-    this.autoUpdater.allowDowngrade = false
-  }
-
-  private registerEventListener() {
-    this.autoUpdater.on('checking-for-update', () => {
-      logger.debug('检查更新流程已启动...')
-    })
-
-    this.autoUpdater.on('update-available', async (info: UpdateInfo) => {
-      logger.info(`有可用更新！当前版本：${app.getVersion()}，新版本：${info.version}`)
-
+  public async checkForUpdates(source: string) {
+    try {
+      // 先确定最新版本号（读 CDN 上的 package.json），用于拼接 release 下载基址
+      await getLatestVersion()
+      const assetsURL = getAssetsURL()
+      this.safeSource = source === 'github' ? '' : new URL(source).href
+      this.assetsURL = assetsURL
+      const latestYmlURL = `${this.safeSource}${new URL('latest.yml', this.assetsURL)}`
+      const ymlResp = await net.fetch(latestYmlURL)
+      if (!ymlResp.ok) {
+        logger.debug(`获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源可能尚未发布`)
+        return
+      }
+      const ymlContent = (await ymlResp.text()) as string
+      const latestYml = yaml.parse(ymlContent) as LatestYml | null
+      if (!latestYml || typeof latestYml.version !== 'string') {
+        logger.debug('未获取到有效的更新信息（更新源可能尚未发布），跳过本次更新')
+        return
+      }
+      this.versionInfo = latestYml
+      if (!semver.gt(latestYml.version, app.getVersion())) {
+        logger.info(`${app.getVersion()} 已经是最新版本，无需更新`)
+        windowManager.send(IPC_CHANNELS.updater.updateAvailable, {
+          update: false,
+          version: app.getVersion(),
+          newVersion: latestYml.version,
+        })
+        return
+      }
       const releaseNote = await fetchChangelog()
       windowManager.send(IPC_CHANNELS.updater.updateAvailable, {
         update: true,
         version: app.getVersion(),
-        newVersion: info.version,
+        newVersion: latestYml.version,
         releaseNote,
       })
-    })
-
-    this.autoUpdater.on('update-not-available', (info: UpdateInfo) => {
-      logger.info(`无可用更新。当前版本：${app.getVersion()}，新版本：${info.version}`)
-      windowManager.send(IPC_CHANNELS.updater.updateAvailable, {
-        update: false,
-        version: app.getVersion(),
-        newVersion: info.version,
-      })
-    })
-
-    this.autoUpdater.on('download-progress', (progressInfo: ProgressInfo) => {
-      windowManager.send(IPC_CHANNELS.updater.downloadProgress, progressInfo)
-    })
-
-    this.autoUpdater.on('update-downloaded', (event: UpdateDownloadedEvent) => {
-      logger.info(`${event.version} 更新下载完成!`)
-      windowManager.send(IPC_CHANNELS.updater.updateDownloaded, event)
-    })
-
-    this.autoUpdater.on('error', (error: Error) => {
-      logger.error('更新出错: ', error.message)
-      windowManager.send(IPC_CHANNELS.updater.updateError, {
-        message: error.message,
-        error,
-      })
-    })
-  }
-
-  private async checkUpdateForGithub() {
-    // github 不需要关闭 noCache，requestHeaders 默认就是 null
-    this.autoUpdater.requestHeaders = null
-    this.autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: UPDATE_SOURCE.owner,
-      repo: UPDATE_SOURCE.repo,
-    })
-    return this.autoUpdater.checkForUpdates()
-  }
-
-  private async checkUpdateForGhProxy(source: string) {
-    let sourceURL: URL
-    try {
-      sourceURL = new URL(source)
-    } catch {
-      const msg = `更新源设置错误，你的更新源为 ${source}`
-      throw new Error(msg)
-    }
-    const assetsURL = getAssetsURL()
-    // 自定义更新源
-    this.autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: `${sourceURL}${assetsURL}`,
-    })
-    try {
-      return await this.autoUpdater.checkForUpdates()
-    } catch (error) {
-      const message = `网络错误: ${errorMessage(error).split('\n')[0]}`
-      const downloadURL = `${sourceURL}${assetsURL}${PRODUCT_NAME}_${latestVersion}_windows_x64.exe`
-      windowManager.send(IPC_CHANNELS.updater.updateError, { message, downloadURL })
-    }
-  }
-
-  public async checkForUpdates(source: string) {
-    // 默认情况会在请求的资源 URL 后面添加查询参数 noCache
-    // 但是很多 proxy 站点并没有针对 query 优化，就会导致 404
-    // 本身通过 proxy 访问的 URL 就带有版本号，所以 noCache 完全没作用
-    // 通过下面的 hack 可以不附带 noCache 查询
-    // https://github.com/electron-userland/electron-builder/issues/3415#issuecomment-433082387
-    this.autoUpdater.requestHeaders = { authorization: '' }
-    try {
-      if (!app.isPackaged) {
-        if (!this.autoUpdater.forceDevUpdateConfig) {
-          const message = '更新功能仅在应用打包后可用。'
-          windowManager.send(IPC_CHANNELS.updater.updateError, { message })
-          return
-        }
-        // 开发环境下的更新，要先启动 slow-server (pnpm slow-server)
-        // await this.autoUpdater.checkForUpdates()
-        // return
-      }
-      logger.debug(`检查更新中…… (更新源: ${source})`)
-
-      if (source === 'github') {
-        await this.checkUpdateForGithub()
-      } else {
-        await this.checkUpdateForGhProxy(source)
-      }
-    } catch (error) {
-      const message = `检查更新时发生错误: ${errorMessage(error)}`
+      this.downloadUpdate()
+    } catch (err) {
+      const message = errorMessage(err)
       logger.error(message)
       windowManager.send(IPC_CHANNELS.updater.updateError, { message })
     }
   }
 
   public async downloadUpdate() {
-    this.autoUpdater.downloadUpdate()
+    let fileUrl: string | undefined
+    try {
+      const setupFile = this.versionInfo?.files.find(file => file.url.toLowerCase().endsWith('.exe'))
+      if (!setupFile) {
+        throw new Error('找不到 exe 安装包')
+      }
+      this.savePath = path.join(app.getPath('downloads'), 'livedeck-update-setup.exe')
+      if (existsSync(this.savePath)) {
+        const localFileSha512 = await this.calculateFileHash(this.savePath)
+        if (localFileSha512 === setupFile.sha512) {
+          logger.debug('本地已存在安装包，无需重复下载')
+          windowManager.send(IPC_CHANNELS.updater.updateDownloaded)
+          return
+        }
+      }
+      fileUrl = `${this.safeSource}${new URL(setupFile.url, this.assetsURL!)}`
+      const resp = await net.fetch(fileUrl)
+      if (!resp.ok) {
+        throw new Error(`网络错误: ${resp.statusText}`)
+      }
+      const totalBytes = Number.parseInt(resp.headers.get('Content-Length') ?? '0', 10)
+      logger.debug(`开始下载文件 ${fileUrl}，大小 ${totalBytes / 1024 / 1024} MB`)
+      let downloadBytes = 0
+      const reader = resp.body?.getReader()
+      if (!reader) throw new Error('获取文件流失败')
+      if (existsSync(this.savePath)) unlinkSync(this.savePath)
+      const fileWriter = createWriteStream(this.savePath)
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        downloadBytes += value.length
+        fileWriter.write(value)
+        if (totalBytes > 0) {
+          const progress = (downloadBytes / totalBytes) * 100
+          windowManager.send(IPC_CHANNELS.updater.downloadProgress, {
+            delta: totalBytes - downloadBytes,
+            percent: progress,
+            bytesPerSecond: 0,
+            transferred: downloadBytes,
+            total: totalBytes,
+          })
+        }
+      }
+      fileWriter.end()
+      logger.debug(`文件下载完成，保存到 ${this.savePath}`)
+      windowManager.send(IPC_CHANNELS.updater.updateDownloaded)
+    } catch (err) {
+      const message = `下载文件失败: ${errorMessage(err)}`
+      logger.error(message)
+      windowManager.send(IPC_CHANNELS.updater.updateError, { message, downloadURL: fileUrl })
+    }
   }
 
   public async quitAndInstall() {
-    this.autoUpdater.quitAndInstall(false, true)
+    if (!this.savePath) throw new Error('未指定下载文件路径')
+    if (existsSync(this.savePath)) {
+      await shell.openPath(this.savePath)
+      await sleep(3000)
+      app.quit()
+    } else {
+      logger.error(`下载文件 ${this.savePath} 不存在`)
+    }
+  }
+
+  private calculateFileHash(filePath: string) {
+    return new Promise<string>((resolve, reject) => {
+      const hash = createHash('sha512')
+      const stream = createReadStream(filePath)
+      stream.on('data', chunk => hash.update(chunk))
+      stream.on('end', () => resolve(hash.digest('base64')))
+      stream.on('error', reject)
+    })
   }
 }
 
