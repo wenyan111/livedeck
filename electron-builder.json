@@ -15,7 +15,7 @@
   "electronLanguages": ["zh-CN", "en-US"],
   "files": ["dist-electron", "dist", "!**/fsevents/**"],
   "mac": {
-    "artifactName": "${productName}_${version}_macos_${arch}.${ext}",
+    "artifactName": "${name}-${version}-mac-${arch}.${ext}",
     "target": [
       {
         "target": "dmg",
@@ -32,7 +32,7 @@
       }
     ],
     "icon": "public/favicon.ico",
-    "artifactName": "${productName}_${version}_windows_${arch}.${ext}"
+    "artifactName": "${name}-${version}-windows-${arch}.${ext}"
   },
   "nsis": {
     "oneClick": false,
