@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.2
+
+### 🐞 Bug Fixes（自动更新链路修复）
+- **macOS 自动更新：** 修复 `MacOSUpdater` 只匹配 `${arch()}.dmg` 后缀、而 electron-builder 默认产出 `livedeck-x.y.z.dmg`（无 arch 后缀）导致检测不到更新包的问题。现改为优先匹配 arch 后缀、否则兜底匹配任意 `.dmg`，并修正「已是最新」判定（同版本不再重复下载）。
+- **Windows 自动更新：** `WindowsUpdater` 由标准 electron-updater（默认校验 Authenticode 签名，未签名包会失败）改为仿 macOS 的半自动流程——拉 `latest.yml` → 下载 `exe` → 打开并退出手动装，绕过签名校验（未签名 exe 首次安装会被 SmartScreen 拦截，点「仍要运行」即可）。
+
+### 🚀 Features（Windows 自动发布 CI）
+- 新增 `.github/workflows/release-windows.yml`：打 `v*` tag 即在 `windows-latest` 原生构建未签名 NSIS 安装包（免 wine），并用默认 `GITHUB_TOKEN` 上传 `exe` + `blockmap` + `latest.yml` 到本仓库 release，供 `WindowsUpdater` 读取实现自动更新。
+
 ## v1.0.1
 
 ### ✨ 优化：全量去除原作者品牌 + 发布配置就绪
