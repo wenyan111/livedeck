@@ -376,7 +376,7 @@ class MacOSUpdater implements Updater {
         return
       }
       this.versionInfo = latestYml
-      if (semver.lt(latestYml.version, app.getVersion())) {
+      if (!semver.gt(latestYml.version, app.getVersion())) {
         logger.info(`${app.getVersion()} 已经是最新版本，无需更新`)
         return
       }
@@ -392,7 +392,10 @@ class MacOSUpdater implements Updater {
   public async downloadUpdate() {
     let fileUrl: string | undefined
     try {
-      const setupFile = this.versionInfo?.files.find(file => file.url.endsWith(`${arch()}.dmg`))
+      const files = this.versionInfo?.files ?? []
+      const setupFile =
+        files.find(file => file.url.endsWith(`${arch()}.dmg`)) ??
+        files.find(file => file.url.toLowerCase().endsWith('.dmg'))
       if (!setupFile) {
         const message = '找不到 dmg 文件'
         throw new Error(message)
