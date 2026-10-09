@@ -7,8 +7,8 @@ on:
       - 'v*'
   workflow_dispatch:
 
-# 注意：本 workflow 必须在“已 push 到 GitHub 的仓库”里才会运行。
-# 当前源码仓库 oba-tool 尚未配置 remote，请先 `git remote add` + `git push` 才能触发 CI。
+# 注意：本 workflow 已随源码 push 到 wenyan111/livedeck，打 v* tag 即自动触发。
+# 所用仓库就是 wenyan111/livedeck 自身，因此用默认 GITHUB_TOKEN 即可，无需 RELEASE_TOKEN。
 permissions:
   contents: write
 
@@ -54,15 +54,13 @@ jobs:
           node scripts/extract-changelog.js >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # 把 Windows 资产（exe + blockmap + latest.yml）上传到“发布仓库” wenyan111/livedeck，
-      # 这样应用内 UpdateManager（WindowsUpdater 走 electron-updater 读 latest.yml）才能拉到更新。
-      # 需要名为 RELEASE_TOKEN 的 secret：对 wenyan111/livedeck 有 contents:write 权限的 PAT
-      # （classic token 勾 repo，或 fine-grained token 勾该仓库 Contents:read&write）。
-      # 若本 workflow 所在仓库“就是” wenyan111/livedeck，可删掉下面的 repository 字段，并改用默认 GITHUB_TOKEN。
-      - name: Upload to livedeck release (wenyan111/livedeck)
+      # 把 Windows 资产（exe + blockmap + latest.yml）上传到本仓库的 release，
+      # 这样应用内 UpdateManager（WindowsUpdater 读 latest.yml）才能拉到更新。
+      # 因为 workflow 就在 wenyan111/livedeck 自身，用默认 GITHUB_TOKEN 即可（permissions 已给 contents:write），
+      # 无需额外配置 RELEASE_TOKEN。
+      - name: Upload to release (this repo)
         uses: softprops/action-gh-release@v2
         with:
-          repository: wenyan111/livedeck
           name: ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.notes }}
           files: |
@@ -70,4 +68,4 @@ jobs:
             release/*/*.blockmap
             release/*/latest.yml
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
