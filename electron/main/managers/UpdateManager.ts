@@ -6,12 +6,12 @@ import { app, net, shell } from 'electron'
 import { marked } from 'marked'
 import semver from 'semver'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import { UPDATE_SOURCE } from 'shared/updateSource'
 import * as yaml from 'yaml'
 import windowManager from '#/windowManager'
 import packageJson from '../../../package.json'
 import { createLogger } from '../logger'
 import { errorMessage, sleep } from '../utils'
-import { UPDATE_SOURCE } from 'shared/updateSource'
 
 type LatestYml = {
   version: string
@@ -102,10 +102,21 @@ let latestVersion: string | null = null
 
 async function getLatestVersion() {
   try {
-    // 从 package.json 获取最新版本号
-    const resp = await fetch(
-      new URL(`${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/package.json`, CDN_URL),
+    const versionUrl = new URL(
+      `${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/package.json`,
+      CDN_URL,
     )
+    // jsDelivr 对 @branch 分支 URL 的边缘缓存长达 12h（响应头 s-maxage=43200）。
+    // 若不加 cache-bust，发布后旧版用户最长 12h 内检测不到新版本。
+    // 追加随机查询参数可强制边缘节点回源（GitHub）拉取最新 package.json。
+    versionUrl.searchParams.set('t', Date.now().toString())
+
+    const resp = await net.fetch(versionUrl.toString(), {
+      // 不加上 User-Agent 会访问超时
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      },
+    })
     // 更新源仓库尚未创建/发布时，CDN 会返回 404 + 一段 "Couldn't find ..." 文本；
     // 必须先判 ok，否则 resp.json() 会因非 JSON 抛出 "Unexpected token" 的误导性错误
     if (!resp.ok) {
@@ -129,8 +140,12 @@ async function fetchChangelog() {
     return releaseNotes[latestVersion]
   }
   try {
-    // 去 CDN 找
-    const changelogURL = new URL(`${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/CHANGELOG.md`, CDN_URL)
+    // 去 CDN 找（同样追加 cache-bust，避免回源滞后导致更新说明显示旧内容）
+    const changelogURL = new URL(
+      `${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/CHANGELOG.md`,
+      CDN_URL,
+    )
+    changelogURL.searchParams.set('t', Date.now().toString())
     const changelogContent = await fetchWithRetry(changelogURL).then(res => res?.text())
     if (changelogContent) {
       // 找到新版本到当前版本的所有更新日志
@@ -224,7 +239,9 @@ class WindowsUpdater implements Updater {
       const latestYmlURL = `${this.safeSource}${new URL('latest.yml', this.assetsURL)}`
       const ymlResp = await net.fetch(latestYmlURL)
       if (!ymlResp.ok) {
-        logger.debug(`获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源可能尚未发布`)
+        logger.debug(
+          `获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源可能尚未发布`,
+        )
         return
       }
       const ymlContent = (await ymlResp.text()) as string
@@ -261,7 +278,9 @@ class WindowsUpdater implements Updater {
   public async downloadUpdate() {
     let fileUrl: string | undefined
     try {
-      const setupFile = this.versionInfo?.files.find(file => file.url.toLowerCase().endsWith('.exe'))
+      const setupFile = this.versionInfo?.files.find(file =>
+        file.url.toLowerCase().endsWith('.exe'),
+      )
       if (!setupFile) {
         throw new Error('找不到 exe 安装包')
       }
@@ -353,7 +372,9 @@ class MacOSUpdater implements Updater {
       const ymlResp = await net.fetch(latestYmlURL)
       // 更新源仓库尚未发布时这里会拿到 404 的说明文本，直接 parse 会产出无 version 的字符串再触发 semver 报错
       if (!ymlResp.ok) {
-        logger.debug(`获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源仓库可能尚未发布`)
+        logger.debug(
+          `获取更新信息失败（HTTP ${ymlResp.status}）：${latestYmlURL}，更新源仓库可能尚未发布`,
+        )
         return
       }
       const ymlContent = (await ymlResp.text()) as string

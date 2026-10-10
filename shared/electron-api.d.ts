@@ -1,13 +1,10 @@
+import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
-import type {
-  DashboardSnapshot,
-  DouyinDashboardConfig,
-} from './dashboard'
+import type { DashboardSnapshot, DouyinDashboardConfig } from './dashboard'
+import type { DataEntrySavedState } from './dataEntryState'
 import { IPC_CHANNELS } from './ipcChannels'
 import type { LiveReportColumn } from './liveReportColumns'
-import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
-import type { DataEntrySavedState } from './dataEntryState'
 
 export interface IpcChannels {
   // LiveControl
@@ -168,47 +165,46 @@ export interface IpcChannels {
   }) => void
   /** 设置应用外观主题（同步系统标题栏明暗） */
   [IPC_CHANNELS.app.setTheme]: (theme: 'light' | 'dark') => void
+  /** 返回运行时真实版本号（asar 内 package.json） */
+  [IPC_CHANNELS.app.getVersion]: () => string
 
   [IPC_CHANNELS.account.switch]: (params: { account: Account }) => void
 
   // 抖音直播数据大屏
   [IPC_CHANNELS.dashboard.getSnapshot]: () => DashboardSnapshot | null
   [IPC_CHANNELS.dashboard.refresh]: () => DashboardSnapshot | null
-  [IPC_CHANNELS.dashboard.setConfig]: (config: Partial<DouyinDashboardConfig>) => DouyinDashboardConfig
+  [IPC_CHANNELS.dashboard.setConfig]: (
+    config: Partial<DouyinDashboardConfig>,
+  ) => DouyinDashboardConfig
   [IPC_CHANNELS.dashboard.getConfig]: () => DouyinDashboardConfig
   [IPC_CHANNELS.dashboard.updated]: (snapshot: DashboardSnapshot) => void
 
   // 直播日报（视觉识别 + 本地 Excel 导出）
-  [IPC_CHANNELS.dataEntry.recognize]: (
-    params: {
-      images: { path?: string; base64?: string }[]
-      config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
-      columns?: LiveReportColumn[]
-      templateId?: string  // 传 'use-saved' 使用已保存的模板
-    },
-  ) => { values: Record<string, string>; lowConfidence: string[] }
+  [IPC_CHANNELS.dataEntry.recognize]: (params: {
+    images: { path?: string; base64?: string }[]
+    config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
+    columns?: LiveReportColumn[]
+    templateId?: string // 传 'use-saved' 使用已保存的模板
+  }) => { values: Record<string, string>; lowConfidence: string[] }
   [IPC_CHANNELS.dataEntry.selectOutputPath]: () => string | null
-  [IPC_CHANNELS.dataEntry.exportExcel]: (
-    params: {
-      values?: Record<string, string>
-      rows?: Record<string, string>[]
-      outputPath: string
-      columns?: LiveReportColumn[]
-    },
-  ) => string
-  [IPC_CHANNELS.dataEntry.generateTemplate]: (
-    params: { outputPath: string; columns?: LiveReportColumn[] },
-  ) => string
+  [IPC_CHANNELS.dataEntry.exportExcel]: (params: {
+    values?: Record<string, string>
+    rows?: Record<string, string>[]
+    outputPath: string
+    columns?: LiveReportColumn[]
+  }) => string
+  [IPC_CHANNELS.dataEntry.generateTemplate]: (params: {
+    outputPath: string
+    columns?: LiveReportColumn[]
+  }) => string
   [IPC_CHANNELS.dataEntry.getColumns]: () => LiveReportColumn[]
   [IPC_CHANNELS.dataEntry.saveColumns]: (columns: LiveReportColumn[]) => void
   // 视觉模板校准
-  [IPC_CHANNELS.dataEntry.calibrateTemplate]: (
-    params: {
-      image: { path?: string; base64?: string }
-      config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
-      knownValues: Record<string, string>
-    },
-  ) => VisionTemplate
+  [IPC_CHANNELS.dataEntry.calibrateTemplate]: (params: {
+    image: { path?: string; base64?: string }
+    config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
+    knownValues: Record<string, string>
+  }) => VisionTemplate
   [IPC_CHANNELS.dataEntry.getTemplate]: () => VisionTemplate | null
   [IPC_CHANNELS.dataEntry.deleteTemplate]: () => void
   // 表单数据持久化

@@ -38,6 +38,11 @@ function setupIpcHandlers() {
     nativeTheme.themeSource = theme
   })
 
+  // 返回运行时真实版本号（asar 内 package.json），避免渲染层构建时内联版本滞后
+  typedIpcMainHandle(IPC_CHANNELS.app.getVersion, () => {
+    return app.getVersion()
+  })
+
   typedIpcMainHandle(IPC_CHANNELS.app.writeLog, (_, { level, message, scope }) => {
     const logger = createLogger(scope ?? 'App')
     if (level === 'error') {

@@ -120,5 +120,6 @@ export const IPC_CHANNELS = {
     providersUpdated: 'app:providersUpdated',
     writeLog: 'app:writeLog',
     setTheme: 'app:setTheme',
+    getVersion: 'app:getVersion',
   },
 } as const

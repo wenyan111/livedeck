@@ -1,18 +1,28 @@
 import { RefreshCw } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateConfigStore, useUpdateStore } from '@/hooks/useUpdate'
-import { version } from '../../../../package.json'
 
 export function UpdateSetting() {
   const { enableAutoCheckUpdate, setEnableAutoCheckUpdate } = useUpdateConfigStore()
   const updateStatus = useUpdateStore.use.status()
   const checkUpdateManually = useUpdateStore.use.checkUpdateManually()
   const [isUpToDate, setIsUpToDate] = useState(false)
+  // 运行时真实版本号（来自主进程 app.getVersion()，读取 asar 内 package.json），
+  // 避免渲染层构建时内联版本滞后的问题
+  const [currentVersion, setCurrentVersion] = useState<string>('…')
+
+  useEffect(() => {
+    window.ipcRenderer
+      .invoke(IPC_CHANNELS.app.getVersion)
+      .then(v => setCurrentVersion(v))
+      .catch(() => {})
+  }, [])
 
   const checkUpdate = async () => {
     const result = await checkUpdateManually()
@@ -73,7 +83,7 @@ export function UpdateSetting() {
         <div className="flex items-center justify-between">
           <div className="space-y-1">
             <h4 className="text-sm font-medium leading-none">当前版本</h4>
-            <p className="text-sm text-muted-foreground">{version}</p>
+            <p className="text-sm text-muted-foreground">{currentVersion}</p>
           </div>
         </div>
       </CardContent>

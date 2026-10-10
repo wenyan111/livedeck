@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.5
+
+### 🐞 Bug Fixes（自动更新检测与版本显示）
+- **修复「检测不到新版本」：** 版本探针 `getLatestVersion()` 此前直连 jsDelivr `@main` 分支 CDN，该 URL 边缘缓存长达 12h（`s-maxage=43200`），导致发布后最长 12h 内旧版用户仍判定「已是最新」。现对 `package.json` / `CHANGELOG.md` 请求追加 `?t=<时间戳>` 强制边缘节点回源（GitHub）拉取最新内容。
+- **修复「当前版本」显示滞后：** 设置页「当前版本」此前读取渲染层构建时内联的 `package.json` 版本常量，bump 与 `vite build` 次序错位时会冻结在旧版本（如已装 1.0.3 却显示 1.0.2）。现改为运行时通过新增 `app:getVersion` IPC 读取 `app.getVersion()`，始终与标题栏一致。
+
 ## v1.0.4
 
 ### 🚀 发布：自动更新通道正式上线
