@@ -46,7 +46,6 @@ export class BuyinPlatform
   private mainPage: Page | null = null
   private commentListener: ICommentListener | null = null
   private openPriceOnTrigger: (() => void) | null = null
-  private openPriceExposed = false
   private readonly openPriceLogger = createLogger('开价变预热')
   /** 页面重载监听的注销函数 */
   private reloadOff: (() => void) | null = null
@@ -156,10 +155,7 @@ export class BuyinPlatform
         Result.try({
           immediate: true,
           try: async () => {
-            if (!this.openPriceExposed) {
-              await page.exposeFunction('__openPriceTrigger', () => this.openPriceOnTrigger?.())
-              this.openPriceExposed = true
-            }
+            await this.exposeOpenPriceTrigger(page)
             await page.evaluate(OPEN_PRICE_WATCHER_SCRIPT)
             // 页面重载后脚本会丢失，这里兜底重新注入，避免监听静默失效
             this.armReloadReinject(page)
@@ -173,6 +169,17 @@ export class BuyinPlatform
     )
   }
 
+  /** 重新把 __openPriceTrigger 暴露到页面（reload 后必须重新 expose） */
+  private async exposeOpenPriceTrigger(page: Page): Promise<void> {
+    try {
+      await page.exposeFunction('__openPriceTrigger', () => this.openPriceOnTrigger?.())
+    } catch (err) {
+      // 同一 document 下重复 exposeFunction 会抛错，监听已存在则忽略
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!msg.includes('already')) throw err
+    }
+  }
+
   /** 页面发生重载（load）后自动重新注入监听脚本 */
   private armReloadReinject(page: Page) {
     if (this.reloadOff) {
@@ -182,9 +189,10 @@ export class BuyinPlatform
       if (!this.openPriceOnTrigger) {
         return
       }
-      // 新 document 里没有脚本，直接重新注入（脚本内自带幂等保护）
-      page
-        .evaluate(OPEN_PRICE_WATCHER_SCRIPT)
+      // 新 document 里 exposed 函数已随页面销毁，必须先重新 expose 再重注脚本，
+      // 否则脚本里 window.__openPriceTrigger 不存在，开价跳变会静默失效。
+      this.exposeOpenPriceTrigger(page)
+        .then(() => page.evaluate(OPEN_PRICE_WATCHER_SCRIPT))
         .then(() => {
           this.openPriceLogger.success('页面已重载，开价监听已自动重新注入')
         })
@@ -213,6 +221,8 @@ export class BuyinPlatform
       // 先卸载再注入：只 evaluate 脚本会被内部的幂等保护直接 return，
       // 心跳不会刷新，下一次检查又会判定失效。
       await stopWatcherScript(page)
+      // 若页面已重载（exposed 函数随 document 销毁），需重新 expose，否则触发静默失效
+      await this.exposeOpenPriceTrigger(page)
       await page.evaluate(OPEN_PRICE_WATCHER_SCRIPT)
       return true
     } catch {

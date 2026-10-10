@@ -6,17 +6,17 @@ import { immer } from 'zustand/middleware/immer'
 import { AUTO_REPLY } from '@/constants'
 import { EVENTS, eventEmitter } from '@/utils/events'
 import { matchObject } from '@/utils/filter'
+import { mergeWithoutArray } from '@/utils/misc'
 import { useAccounts } from './useAccounts'
 import type { ChatMessage } from './useAIChat'
 import { type AIProvider, useAIProvider } from './useAIProvider'
 import {
   type AutoReplyConfig,
+  createDefaultConfig as createDefaultAutoReplyConfig,
   type FilterKeywordItem,
   useAutoReplyConfig,
   useAutoReplyConfigStore,
-  createDefaultConfig as createDefaultAutoReplyConfig,
 } from './useAutoReplyConfig'
-import { mergeWithoutArray } from '@/utils/misc'
 import { useErrorHandler } from './useErrorHandler'
 import { useLiveControlStore } from './useLiveControl'
 
@@ -437,8 +437,7 @@ const handleAIReply = async (
   // 旧提示写「请分析所有评论，并根据以下要求生成一个回复」，「分析」+「根据以下要求」
   // 会诱导模型把思考过程/规则复述也写进正文（历史事故：…所以要回答：…）。
   // 现改成「直接针对这条评论写一条回复」，并硬性禁止思考/规则/重复。
-  const systemPrompt =
-    `你是直播间客服。下面是一位观众的评论，JSON 格式：{"nickname": "用户昵称", "content": "评论内容"}。请直接针对这条评论写一条回复。\n\n请按以下要求写这个回复：\n${prompt}\n\n【输出要求】只输出这条回复的正文，除此之外什么都不要写：\n- 不要输出你的思考过程、分析、判断依据或规则说明；\n- 不要以「用户问…」「首先看规则…」「所以要回答：」这类话开头；\n- 只输出一条：不要重复同一句话、不要给多条备选、不要编号或分多段；\n- 不要加引号，也不要加「回复：」之类的前缀。`
+  const systemPrompt = `你是直播间客服。下面是一位观众的评论，JSON 格式：{"nickname": "用户昵称", "content": "评论内容"}。请直接针对这条评论写一条回复。\n\n请按以下要求写这个回复：\n${prompt}\n\n【输出要求】只输出这条回复的正文，除此之外什么都不要写：\n- 不要输出你的思考过程、分析、判断依据或规则说明；\n- 不要以「用户问…」「首先看规则…」「所以要回答：」这类话开头；\n- 只输出一条：不要重复同一句话、不要给多条备选、不要编号或分多段；\n- 不要加引号，也不要加「回复：」之类的前缀。`
 
   const messages = [
     { role: 'system', content: systemPrompt }, // id 和 timestamp 对请求不重要
@@ -622,7 +621,9 @@ export function useAutoReply() {
         commentContent &&
         accountConfig.filterKeywords?.some(kw => checkFilterKeyword(commentContent, kw))
       ) {
-        const matchedKw = accountConfig.filterKeywords?.find(kw => checkFilterKeyword(commentContent, kw))
+        const matchedKw = accountConfig.filterKeywords?.find(kw =>
+          checkFilterKeyword(commentContent, kw),
+        )
         const matchedText = typeof matchedKw === 'string' ? matchedKw : matchedKw?.text
         const matchTypeStr =
           typeof matchedKw === 'string'
@@ -647,7 +648,7 @@ export function useAutoReply() {
         case 'comment': {
           // 1) 优先尝试关键字回复：走关键字回复的评论不再进入 AI 流程，
           //    避免被 AI 智能过滤误杀，确保「弹幕过滤关键词」与「关键字回复」都优先于 AI。
-          const keywordReplied = handleKeywordReply(comment, accountConfig, currentAccountId, handleError)
+          const keywordReplied = handleKeywordReply(comment, accountConfig, accountId, handleError)
           if (!keywordReplied) {
             // 2) 关键字未命中时，才用 AI 智能过滤判定是否需要回复
             if (accountConfig.comment.aiFilter?.enable && commentContent) {
@@ -710,7 +711,10 @@ export function useAutoReply() {
         }
         case 'live_order': {
           /* 如果设置了仅已支付回复且当前非已支付时不回复 */
-          if (!accountConfig.live_order.options?.onlyReplyPaid || comment.order_status === '已付款') {
+          if (
+            !accountConfig.live_order.options?.onlyReplyPaid ||
+            comment.order_status === '已付款'
+          ) {
             sendConfiguredReply(accountId, accountConfig, comment, handleError)
           }
           break

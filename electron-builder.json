@@ -1,7 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.wenyan111.livedeck",
-  "productName": "LiveDeck・直播台",
+  "productName": "Electron",
+  "executableName": "Electron",
   "asar": true,
   "directories": {
     "output": "release/${version}"

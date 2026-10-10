@@ -54,16 +54,25 @@ type PerPlatformSelection = Partial<Record<LiveControlPlatform, Record<QuickStar
 /** 每个平台各自的「连接后自动开启」开关值（Partial 实现遗留兜底） */
 type PerPlatformAutoStart = Partial<Record<LiveControlPlatform, boolean>>
 
+/**
+ * 把任意持久化值规整成「可安全索引的对象」。
+ * 旧版本（1.0.1 及更早）曾把 autoStart / selection 直接存成布尔或 null，
+ * 若当成对象索引会取到 undefined 甚至抛错，导致「开关永远显示开、隔离失效」。
+ * 这里统一把非对象（布尔 / null / 数组 / undefined）当空对象处理。
+ */
+function asRecord<T>(v: unknown): Record<string, T> | Record<string, never> {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, T>) : {}
+}
+
 /** 读取「账号 × 平台」的「连接后自动开启」开关（无自己的值时回落到 v3 前的全局值，默认开） */
 export function readQuickStartAutoStart(
   autoStart: Record<string, PerPlatformAutoStart | undefined>,
   accountId: string | undefined,
   platform: LiveControlPlatform,
 ): boolean {
+  const map = asRecord<PerPlatformAutoStart | undefined>(autoStart)
   return Boolean(
-    (accountId ? autoStart[accountId]?.[platform] : undefined) ??
-      autoStart.__platform?.[platform] ??
-      true,
+    (accountId ? map[accountId]?.[platform] : undefined) ?? map.__platform?.[platform] ?? true,
   )
 }
 
@@ -73,9 +82,10 @@ export function readQuickStartSelection(
   accountId: string | undefined,
   platform: LiveControlPlatform,
 ): Record<QuickStartKey, boolean> {
+  const map = asRecord<PerPlatformSelection | undefined>(selection)
   return (
-    (accountId ? selection[accountId]?.[platform] : undefined) ??
-    selection.__platform?.[platform] ??
+    (accountId ? map[accountId]?.[platform] : undefined) ??
+    map.__platform?.[platform] ??
     DEFAULT_PER_PLATFORM
   )
 }
@@ -123,28 +133,54 @@ export const useQuickStartStore = create<QuickStartStore>()(
       autoStart: {},
       toggle: (accountId, platform, key, checked) =>
         set(state => {
+          // 容错：旧数据可能把 selection 存成非对象，先规整成对象再写，避免写入失败或整块被替换
+          const selMap = asRecord<PerPlatformSelection | undefined>(state.selection)
           // 首次改动时，以「当前生效的勾选」（含 v2 遗留兜底）为底本落一份完整副本，
           // 避免只写单个 key 后读取时无法再回落到遗留数据
           const base = {
-            ...(state.selection.__platform?.[platform] ?? DEFAULT_PER_PLATFORM),
-            ...(state.selection[accountId]?.[platform] ?? {}),
+            ...(selMap.__platform?.[platform] ?? DEFAULT_PER_PLATFORM),
+            ...(selMap[accountId]?.[platform] ?? {}),
           }
-          state.selection[accountId] = {
-            ...state.selection[accountId],
-            [platform]: { ...base, [key]: checked },
+          state.selection = {
+            ...selMap,
+            [accountId]: {
+              ...(selMap[accountId] ?? {}),
+              [platform]: { ...base, [key]: checked },
+            },
           }
         }),
       setAutoStartOnConnect: (accountId, platform, enabled) =>
         set(state => {
-          state.autoStart[accountId] = {
-            ...state.autoStart[accountId],
-            [platform]: enabled,
+          // 容错：旧数据可能把 autoStart 存成布尔 / null（1.0.1 遗留），
+          // 直接给布尔加属性在 immer 下不会生效甚至会整块被替换；先规整成对象再写。
+          const asMap = asRecord<PerPlatformAutoStart | undefined>(state.autoStart)
+          state.autoStart = {
+            ...asMap,
+            [accountId]: {
+              ...(asMap[accountId] ?? {}),
+              [platform]: enabled,
+            },
           }
         }),
     })),
     {
       name: 'quick-start-storage',
       version: 3,
+      // 自愈：旧版本遗留的脏数据可能把 autoStart / selection 持久化成布尔或 null，
+      // 这里在水合时统一规整成对象，避免「开关永远开、隔离失效」的脏状态被原样读回。
+      merge: (persisted: any, current: QuickStartStore) => {
+        const p = (
+          persisted && typeof persisted === 'object' ? persisted : {}
+        ) as Partial<QuickStartStore>
+        const normalizeMap = (v: unknown) =>
+          v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+        return {
+          ...current,
+          ...p,
+          selection: normalizeMap(p.selection),
+          autoStart: normalizeMap(p.autoStart),
+        }
+      },
       migrate: (persisted: any, version: number) => {
         // v1：selection 是全局的 Record<QuickStartKey, boolean>，autoStartOnConnect 全局布尔
         // v2：selection 升级为按平台隔离
@@ -523,5 +559,13 @@ export function useQuickStartAutoStart() {
     } else if (!connected) {
       lastConnectedRef.current = false
     }
-  }, [isConnected, autoStartOnConnect, currentAccountId, platformSelection, startByKey, toast, platform])
+  }, [
+    isConnected,
+    autoStartOnConnect,
+    currentAccountId,
+    platformSelection,
+    startByKey,
+    toast,
+    platform,
+  ])
 }
