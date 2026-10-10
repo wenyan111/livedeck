@@ -63,7 +63,7 @@
     "@welldone-software/why-did-you-render": "10.0.1",
     "ahooks": "^3.8.4",
     "builder-util-runtime": "^9.2.10",
-    "bumpp": "^10.0.1",
+    "bumpp": "^12.3.0",
     "changelogen": "^0.6.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
