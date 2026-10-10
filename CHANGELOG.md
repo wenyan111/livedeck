@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.6
+
+### 🐞 Bug Fixes（自动更新版本探测彻底去 CDN 分支缓存依赖）
+- **根因修正：** 1.0.5 仅给 CDN 版本探测加了 `?t=` cache-bust，但实测 `fastly.jsdelivr.net` 对 `@main` 分支的边缘缓存极顽固（purge 也清不掉），仍长时间返回旧版本，旧版 app 依旧检测不到更新。
+- **改法：** 版本探测主源改为 **GitHub Releases API**（`/releases/latest` 取最新 tag，权威且不受 CDN 分支缓存影响）；jsDelivr CDN 仅作回退，并追加 `?t=` 强制回源。回退 CDN 主机由 `fastly.jsdelivr.net` 改为更可靠的 `cdn.jsdelivr.net`。
+
 ## v1.0.5
 
 ### 🐞 Bug Fixes（自动更新检测与版本显示）

@@ -26,7 +26,9 @@ type LatestYml = {
 }
 
 // 更新源（GitHub owner/repo/branch）统一由 shared/updateSource.ts 的 UPDATE_SOURCE 配置
-const CDN_URL = 'https://fastly.jsdelivr.net/gh/'
+// 注意：版本探测的「回退」才用 CDN；主探测走 GitHub Releases API（见 getLatestVersion），
+// 避免 jsDelivr 分支 URL 的边缘缓存（fastly 尤为顽固，purge 也清不掉）导致检测不到新版本。
+const CDN_URL = 'https://cdn.jsdelivr.net/gh/'
 const PRODUCT_NAME = packageJson.name
 
 const logger = createLogger('update')
@@ -102,13 +104,35 @@ let latestVersion: string | null = null
 
 async function getLatestVersion() {
   try {
+    // 主探测：GitHub Releases API 取「最新正式发布」的 tag（权威、不受 jsDelivr 分支缓存影响）
+    const releaseUrl = `https://api.github.com/repos/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/releases/latest`
+    try {
+      const relResp = await net.fetch(`${releaseUrl}?t=${Date.now()}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          Accept: 'application/vnd.github+json',
+        },
+      })
+      if (relResp.ok) {
+        const data = (await relResp.json()) as { tag_name?: string }
+        const tag = data.tag_name
+        if (tag) {
+          const v = tag.replace(/^v/, '')
+          logger.debug(`从 GitHub Releases 获取到的版本为 ${v}`)
+          latestVersion = v
+          return v
+        }
+      }
+      logger.debug(`GitHub Releases 未返回有效版本（HTTP ${relResp.status}），回退 CDN`)
+    } catch (e) {
+      logger.debug(`GitHub Releases 探测失败，回退 CDN：${errorMessage(e)}`)
+    }
+
+    // 回退：jsDelivr CDN（追加 cache-bust 强制边缘节点回源，避免 12h 缓存滞后）
     const versionUrl = new URL(
       `${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}@${UPDATE_SOURCE.branch}/package.json`,
       CDN_URL,
     )
-    // jsDelivr 对 @branch 分支 URL 的边缘缓存长达 12h（响应头 s-maxage=43200）。
-    // 若不加 cache-bust，发布后旧版用户最长 12h 内检测不到新版本。
-    // 追加随机查询参数可强制边缘节点回源（GitHub）拉取最新 package.json。
     versionUrl.searchParams.set('t', Date.now().toString())
 
     const resp = await net.fetch(versionUrl.toString(), {
