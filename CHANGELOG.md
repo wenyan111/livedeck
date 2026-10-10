@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.4
+
+### 🚀 发布：自动更新通道正式上线
+- 通过 CI（`release.yml` + `release-windows.yml`）发布 GitHub release，补齐 `latest-mac.yml` / `latest.yml` 与双平台安装包（macOS dmg / Windows NSIS exe），应用内「检查更新 → 下载 → 安装」端到端可用。
+- 版本 1.0.3 → 1.0.4。
+
+## v1.0.3
+
+### 🐞 Bug Fixes（本机已验证，随 1.0.4 一并发布）
+- 修复多账号环境下关键词自动回复串号：回复改用评论所属账号 `accountId`，不再误用 UI 当前选中账号 `currentAccountId`。
+- 修复开价联动监听在页面 reload / 重连后静默失效：触发源账号连上中控台时自动拉起监听，恢复联动通电。
+
 ## v1.0.2
 
 ### 🐞 Bug Fixes（自动更新链路修复）
