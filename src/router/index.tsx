@@ -4,11 +4,12 @@ import AutoMessage from '@/pages/AutoMessage'
 import AutoPopUp from '@/pages/AutoPopUp'
 import AutoReply from '@/pages/AutoReply'
 import AutoReplySettings from '@/pages/AutoReply/AutoReplySettings'
+import DataEntry from '@/pages/DataEntry'
 import LiveControl from '@/pages/LiveControl'
+import LiveControlManage from '@/pages/LiveControlManage'
 import OpenPriceScript from '@/pages/OpenPriceScript'
 import RedPacket from '@/pages/RedPacket'
 import Settings from '@/pages/SettingsPage'
-import DataEntry from '@/pages/DataEntry'
 import App from '../App'
 
 export const router = createHashRouter([
@@ -19,6 +20,10 @@ export const router = createHashRouter([
       {
         path: '/',
         element: <LiveControl />,
+      },
+      {
+        path: '/live-control-manage',
+        element: <LiveControlManage />,
       },
       {
         path: '/auto-message',

@@ -30,7 +30,9 @@ export const SELECTORS = {
   VIDEO: '[class^=video-container]',
   commentInput: {
     TEXTAREA: 'div[class^=reply-content] input[type=text]',
-    PIN_TOP_LABEL: 'div[class^=reply-content] label',
+    // 回复框下方的「置顶评论」复选框（勾选后再发送即为置顶）。
+    // 页面上它不一定渲染成 <label>，element-finder 里另有多级兜底（容器内按文本搜索）。
+    PIN_TOP_LABEL: '[class*=reply-content] label:has-text("置顶")',
     SUBMIT_BUTTON: 'div[class^=reply-content] button',
   },
   overlays: {

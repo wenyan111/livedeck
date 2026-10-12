@@ -503,69 +503,57 @@ function reportResults(
  * 后者是断线自动恢复：断线（浏览器被关 / 网络抖动）会把所有任务停掉，
  * 不恢复的话用户就得回到各自页面一个个手动重开——历史上最坑的是「自动回复」，
  * 界面还显示在监听，实际一条弹幕都进不来。
+ *
+ * 遍历「所有账号」而非只看当前账号：这样在「中控台管理」里一次性连接的多个账号，
+ * 各自连上时都会自动开启自己的功能（按各账号 × 平台的勾选，互不代入）。
+ * 对当前账号的行为与旧版完全一致（只在「未连接 -> 已连接」瞬间触发一次）。
  */
 export function useQuickStartAutoStart() {
-  const isConnected = useCurrentLiveControl(context => context.isConnected)
-  const platform = useCurrentLiveControl(context => context.platform)
-  const { currentAccountId } = useAccounts()
-  const autoStartOnConnect = useQuickStartStore(s =>
-    readQuickStartAutoStart(s.autoStart, currentAccountId, platform),
-  )
+  const contexts = useLiveControlStore(s => s.contexts)
+  const autoStartMap = useQuickStartStore(s => s.autoStart)
   const selectionMap = useQuickStartStore(s => s.selection)
   const { startByKey, toast } = useFeatureControls()
-  // 当前账号 × 当前平台各自的勾选（无自己的数据则回落到 v2 按平台的遗留数据）
-  const platformSelection = readQuickStartSelection(selectionMap, currentAccountId, platform)
-
-  const lastConnectedRef = useRef(false)
+  // 记录上一轮每个账号是否处于「已连接」，只在「未连接 -> 已连接」瞬间触发一次
+  const lastConnectedRef = useRef<Record<string, boolean>>({})
 
   useEffect(() => {
-    const connected = isConnected === 'connected'
-    // 只在「未连接 -> 已连接」的瞬间触发一次
-    if (connected && !lastConnectedRef.current) {
-      lastConnectedRef.current = true
-      if (currentAccountId) {
-        const keys = new Set<QuickStartKey>()
-        let resumedCount = 0
-        // 「连接后自动开启」总闸：关闭时连上中控台什么都不自动开，
-        // 连「断线自动恢复」也听这个开关——否则断线重连会把之前在跑的功能原样全拉起来，
-        // 与开关语义矛盾（历史上表现为「开关关了却连接后自动全开」）。
-        if (autoStartOnConnect) {
-          // 断线前正在跑的，优先恢复现场（平台变了就不恢复，避免把上个平台的任务代入新平台）
-          const resumed = consumePendingResume(currentAccountId, platform)
-          resumedCount = resumed.length
-          for (const key of resumed) {
-            keys.add(key)
-          }
-          // 再叠加「连接后自动开启」的勾选项（按当前平台各自的勾选）
-          for (const key of Object.keys(platformSelection) as QuickStartKey[]) {
-            if (platformSelection[key]) {
-              keys.add(key)
-            }
-          }
-        }
-        // 按平台过滤：不支持的功能不启动（如在快手 / 小红书上启动开价监听必然失败）
-        const toStart = Array.from(keys).filter(k => isQuickStartSupported(k, platform))
-        if (toStart.length > 0) {
-          ;(async () => {
-            const results: StartResult[] = []
-            for (const key of toStart) {
-              results.push(await startByKey[key](currentAccountId))
-            }
-            // 断线恢复和「自动开启」可能同时命中，统一按「开启」提示即可
-            reportResults(toast, results, resumedCount > 0 ? '恢复' : '开启')
-          })()
-        }
+    const nextConnected: Record<string, boolean> = {}
+    for (const accountId in contexts) {
+      const context = contexts[accountId]
+      const connected = context?.isConnected === 'connected'
+      nextConnected[accountId] = connected
+      // 只处理「这一刻刚连上」的账号；已连接的不再触发，断开后复位以便下次重连再触发
+      if (!connected || lastConnectedRef.current[accountId]) continue
+
+      const platform = context.platform
+      // 「连接后自动开启」总闸：关闭时连上中控台什么都不自动开，
+      // 连「断线自动恢复」也听这个开关——否则断线重连会把之前在跑的功能原样全拉起来，
+      // 与开关语义矛盾（历史上表现为「开关关了却连接后自动全开」）。
+      if (!readQuickStartAutoStart(autoStartMap, accountId, platform)) continue
+
+      const keys = new Set<QuickStartKey>()
+      // 断线前正在跑的，优先恢复现场（平台变了就不恢复，避免把上个平台的任务代入新平台）
+      const resumed = consumePendingResume(accountId, platform)
+      const resumedCount = resumed.length
+      for (const key of resumed) keys.add(key)
+      // 再叠加「连接后自动开启」的勾选项（按该账号 × 平台各自的勾选）
+      const platformSelection = readQuickStartSelection(selectionMap, accountId, platform)
+      for (const key of Object.keys(platformSelection) as QuickStartKey[]) {
+        if (platformSelection[key]) keys.add(key)
       }
-    } else if (!connected) {
-      lastConnectedRef.current = false
+      // 按平台过滤：不支持的功能不启动（如在快手 / 小红书上启动开价监听必然失败）
+      const toStart = Array.from(keys).filter(k => isQuickStartSupported(k, platform))
+      if (toStart.length === 0) continue
+
+      void (async () => {
+        const results: StartResult[] = []
+        for (const key of toStart) {
+          results.push(await startByKey[key](accountId))
+        }
+        // 断线恢复和「自动开启」可能同时命中，统一按「开启」提示即可
+        reportResults(toast, results, resumedCount > 0 ? '恢复' : '开启')
+      })()
     }
-  }, [
-    isConnected,
-    autoStartOnConnect,
-    currentAccountId,
-    platformSelection,
-    startByKey,
-    toast,
-    platform,
-  ])
+    lastConnectedRef.current = nextConnected
+  }, [contexts, autoStartMap, selectionMap, startByKey, toast])
 }

@@ -5,6 +5,7 @@ import {
   Gift,
   LayoutDashboard,
   MessageSquare,
+  MonitorSmartphone,
   Rocket,
   Settings,
   Sparkles,
@@ -48,6 +49,12 @@ export default function Sidebar() {
   const isOpenPriceScriptFailed = Boolean(openPriceError) && isConnected === 'connected'
 
   const tabs: SidebarTab[] = [
+    {
+      id: '/live-control-manage',
+      name: '中控台管理',
+      group: '中控管理',
+      icon: <MonitorSmartphone className="h-[18px] w-[18px]" />,
+    },
     {
       id: '/',
       name: '打开中控台',

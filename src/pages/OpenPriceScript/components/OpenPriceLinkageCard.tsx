@@ -22,6 +22,7 @@ import {
   useOpenPriceLinkageStore,
 } from '@/hooks/useOpenPriceLinkage'
 import { useOpenPriceScriptStore } from '@/hooks/useOpenPriceScript'
+import { readQuickStartAutoStart, useQuickStartStore } from '@/hooks/useQuickStart'
 import { cn } from '@/lib/utils'
 import AccountScriptEditor from './AccountScriptEditor'
 
@@ -82,6 +83,21 @@ export default function OpenPriceLinkageCard() {
       : EMPTY_MESSAGES,
   )
   const sourceHasScript = sourceMessages.filter(m => m.content.trim() !== '').length > 0
+  // 触发源「连接后自动开启」总闸：关着时，联动在连接瞬间不会自动拉起源的开价监听（联动实际没通电）。
+  // 这里按「当前账号 × 平台」读它，使下方提示能如实反映联动到底能不能自动拉起。
+  const sourceAutoStartOn = useQuickStartStore(state =>
+    config.sourceAccountId
+      ? readQuickStartAutoStart(
+          state.autoStart,
+          config.sourceAccountId,
+          contexts[config.sourceAccountId]?.platform,
+        )
+      : true,
+  )
+  // 触发源展示名（用于提示文案，明确告诉用户是「哪个账号」的监听没起）
+  const sourceAccountName = config.sourceAccountId
+    ? (accountNames[config.sourceAccountId] ?? '')
+    : ''
 
   // 账号增减时补齐跟随列表条目；触发源自己不出现在跟随列表里
   useEffect(() => {
@@ -162,20 +178,46 @@ export default function OpenPriceLinkageCard() {
           {config.sourceAccountId ? (
             <div className="pt-1 space-y-2">
               {/* 触发源必须先开启自己的开价监听，否则检测不到开价 → 整条联动都不会跑 */}
-              <div className="flex items-center justify-between gap-3 rounded-md border border-dashed px-3 py-2">
+              <div
+                className={cn(
+                  'flex items-center justify-between gap-3 rounded-md px-3 py-2',
+                  // 联动已开启，但触发源监听没跑、也没报错 → 整条联动根本触发不了，用琥珀色强提示（不绕过「连接后自动开启」总闸）
+                  config.enabled && !sourceRunning && !sourceError
+                    ? 'border border-warning'
+                    : 'border border-dashed',
+                )}
+              >
                 <div className="flex items-center gap-2 min-w-0">
                   <span
                     className={cn(
                       'w-1.5 h-1.5 shrink-0 rounded-full',
-                      sourceRunning ? 'bg-success' : sourceError ? 'bg-destructive' : 'bg-muted-foreground/40',
+                      sourceRunning
+                        ? 'bg-success'
+                        : sourceError
+                          ? 'bg-destructive'
+                          : 'bg-muted-foreground/40',
                     )}
                   />
-                  <span className="text-xs text-muted-foreground truncate">
+                  <span
+                    className={cn(
+                      'text-xs truncate',
+                      // 联动开着但监听没跑 → 强提醒；autoStart 关着也强提醒
+                      config.enabled && !sourceRunning && !sourceError
+                        ? 'text-warning'
+                        : !sourceRunning && !sourceError && !sourceAutoStartOn
+                          ? 'text-warning'
+                          : 'text-muted-foreground',
+                    )}
+                  >
                     {sourceRunning
                       ? '监听中：检测到开价会自动带动其他平台'
                       : sourceError
                         ? sourceError
-                        : '未开启监听：连接中控台后会由联动自动拉起'}
+                        : !sourceAutoStartOn
+                          ? `未开启监听：「连接后自动开启」已关闭（${sourceAccountName}），联动不会自动拉起，请手动点「开启监听」`
+                          : config.enabled
+                            ? `未开启监听：开价联动不会触发任何平台，请点右侧「开启监听」（${sourceAccountName}）`
+                            : '未开启监听：连接中控台后会由联动自动拉起'}
                   </span>
                 </div>
                 <Button

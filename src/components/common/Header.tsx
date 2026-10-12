@@ -1,10 +1,18 @@
 import { Package } from 'lucide-react'
-import { AccountSwitcher } from './AccountSwitcher'
+import { useLocation } from 'react-router'
 import { useCurrentLiveControl } from '@/hooks/useLiveControl'
 import { cn } from '@/lib/utils'
+import { AccountSwitcher } from './AccountSwitcher'
+
+/** 这些页面的主体本身就是「全账号」视图，头部的单账号切换/状态徽标在此没有意义（会误导） */
+const HIDE_ACCOUNT_CONTROLS_ROUTES = ['/live-control-manage']
 
 export function Header() {
+  const location = useLocation()
   const isConnected = useCurrentLiveControl(context => context.isConnected)
+
+  // 「中控台管理」页自己管理所有账号，隐藏头部这条围绕「当前账号」的控件
+  const hideAccountControls = HIDE_ACCOUNT_CONTROLS_ROUTES.includes(location.pathname)
 
   const status =
     isConnected === 'connected'
@@ -38,16 +46,21 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
-        <span
-          className={cn(
-            'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs',
-            status.cls,
-          )}
-        >
-          <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
-          {status.label}
-        </span>
-        <AccountSwitcher />
+        {/* 「中控台管理」页自行管理全账号，头部这条围绕「当前账号」的控件在此无意义，隐藏 */}
+        {!hideAccountControls && (
+          <>
+            <span
+              className={cn(
+                'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs',
+                status.cls,
+              )}
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
+              {status.label}
+            </span>
+            <AccountSwitcher />
+          </>
+        )}
       </div>
     </header>
   )

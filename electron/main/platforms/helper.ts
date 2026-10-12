@@ -285,7 +285,15 @@ export async function toggleButton(
       }),
     )
   }
-  const buttonText = (await button.textContent())?.trim() || ''
+  // 列表在「读文字」与「读禁用态」之间可能重渲染，按钮句柄会脱离 DOM。
+  // 这类瞬态异常不应让整个任务永久停掉 —— 转成可重试的 ElementNotFoundError，
+  // 上层（runWithRetry）会用全新句柄重新取按钮，下一次通常就能成功。
+  let buttonText: string
+  try {
+    buttonText = (await button.textContent())?.trim() || ''
+  } catch {
+    return Result.fail(new ElementNotFoundError({ elementName: '讲解按钮' }))
+  }
   if (buttonText !== sourceContent && buttonText !== targetContent) {
     return Result.fail(
       new ElementContentMismatchedError({
@@ -301,11 +309,25 @@ export async function toggleButton(
   if (buttonText === targetContent && tryCount > 0) {
     return Result.succeed()
   }
-  if (await button.isDisabled()) {
+  let disabled = false
+  try {
+    disabled = await button.isDisabled()
+  } catch (e) {
+    // 同上：按钮脱离 DOM 属瞬态，交给重试；其余异常（如超时）仍上抛
+    if (
+      /not attached to the (DOM|node)|stale|execution context|detached/i.test(
+        String((e as Error)?.message ?? e),
+      )
+    ) {
+      return Result.fail(new ElementNotFoundError({ elementName: '讲解按钮' }))
+    }
+    throw e
+  }
+  if (disabled) {
     return Result.fail(
       new ElementDisabledError({
         elementName: '讲解按钮',
-        element: await button.evaluate(el => el.outerHTML),
+        element: await button.evaluate(el => el.outerHTML).catch(() => ''),
       }),
     )
   }
