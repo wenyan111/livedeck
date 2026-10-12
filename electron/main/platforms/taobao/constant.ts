@@ -14,8 +14,21 @@ export const REGEXPS = {
 export const SELECTORS = {
   ACCOUNT_NAME: 'div[class^=username]',
   IN_LIVE_LIST: 'div.tblalm-lm-content', // 这是直播计划
+  /** `IN_LIVE_LIST` 的兜底：只认 class 片段，淘宝改版换了构建产物前缀也能认出「已进到直播计划页」 */
+  IN_LIVE_LIST_FALLBACK: '[class*="lm-content"]',
   LIVE_ID:
     '#scrollableDiv .tblalm-lm-list-item-live.online .tblalm-lm-list-item-live-subTitle-id .tui-number-figure',
+  /**
+   * 直播间 ID 的候选定位方式，**从严格到宽松**依次尝试。
+   * 淘宝的 class 是构建产物（tblalm-xxx / tui-xxx），改版后命名会变，
+   * 只认一条完整 class 链（还要带 .online）极易永久失效，所以按「class 片段」逐级兜底。
+   */
+  LIVE_ID_CANDIDATES: [
+    '#scrollableDiv .tblalm-lm-list-item-live.online .tblalm-lm-list-item-live-subTitle-id .tui-number-figure',
+    '[class*="list-item-live"][class*="online"] [class*="subTitle-id"]',
+    '[class*="list-item-live"] [class*="subTitle-id"]',
+    '[class*="subTitle-id"]',
+  ],
   GOODS_ITEM: '#livePushed-tcl-unique-scroll-list .list-item',
   GOODS_ITEMS_WRAPPER: '#tcl-unique-virtual-list',
   commentInput: {
