@@ -218,7 +218,8 @@ const QuickStartCard = React.memo(() => {
             <div>
               <div className="text-sm">连接后自动开启</div>
               <div className="text-muted-foreground text-xs">
-                连接到中控台后，自动开启下方勾选的功能（按账号 × 平台各自记忆）
+                连接到中控台后稍候约 8 秒（等页面加载完成）自动开启下方勾选的功能（按账号 ×
+                平台各自记忆）
               </div>
             </div>
             <AutoStartSwitch accountId={currentAccountId} platform={platform} />

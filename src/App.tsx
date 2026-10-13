@@ -1,7 +1,6 @@
 import { RefreshCwIcon, TerminalIcon } from 'lucide-react'
 import { Outlet, useLocation } from 'react-router'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
-import LogDisplayer from '@/components/common/LogDisplayer'
 import Sidebar from '@/components/common/Sidebar'
 import {
   ContextMenu,
@@ -19,6 +18,7 @@ import './App.css'
 import { useEffect } from 'react'
 import { UpdateDialog } from './components/update/UpdateDialog'
 import { useAccounts } from './hooks/useAccounts'
+import { useApplyTheme } from './hooks/useAppearance'
 import { useAutoMessageStore } from './hooks/useAutoMessage'
 import { useAutoPopUpStore } from './hooks/useAutoPopUp'
 import { useAutoReply, useAutoReplyStore } from './hooks/useAutoReply'
@@ -27,13 +27,13 @@ import { useLiveControlStore } from './hooks/useLiveControl'
 import { useOpenPriceLinkageGlobal } from './hooks/useOpenPriceLinkage'
 import { useOpenPriceScriptStore, useOpenPriceStatusSync } from './hooks/useOpenPriceScript'
 import { markDisconnectedTasks, useQuickStartAutoStart } from './hooks/useQuickStart'
-import { useApplyTheme } from './hooks/useAppearance'
 import { useToast } from './hooks/useToast'
 import { useUpdateConfigStore, useUpdateStore } from './hooks/useUpdate'
 
 function useGlobalIpcListener() {
   const { handleComment } = useAutoReply()
   const { setIsListening } = useAutoReplyStore()
+  const setIsRunningAutoReply = useAutoReplyStore(s => s.setIsRunning)
   const { setIsConnected, setAccountName } = useLiveControlStore()
   const setIsRunningAutoMessage = useAutoMessageStore(s => s.setIsRunning)
   const setIsRunningAutoPopUp = useAutoPopUpStore(s => s.setIsRunning)
@@ -54,6 +54,7 @@ function useGlobalIpcListener() {
     setIsListening(id, 'stopped')
     setIsRunningAutoMessage(id, false)
     setIsRunningAutoPopUp(id, false)
+    setIsRunningAutoReply(id, false)
     useOpenPriceScriptStore.getState().setRunning(id, false)
     // 记下断线前的现场，重连成功后自动恢复
     markDisconnectedTasks(id, resumableTaskTypes ?? [])
@@ -71,9 +72,10 @@ function useGlobalIpcListener() {
 
   // 开价监听失效 / 恢复：让界面状态如实反映页面里的监听脚本是否还活着
   useIpcListener(IPC_CHANNELS.tasks.autoMessage.openPriceWatcherLost, id => {
-    useOpenPriceScriptStore
-      .getState()
-      .setError(id, '开价监听已失效（页面已重载），请到开价话术页重新开启')
+    const store = useOpenPriceScriptStore.getState()
+    store.setError(id, '开价监听已失效（页面已重载），请到开价话术页重新开启')
+    // 监听已失效 = 事实上没在跑了，状态必须一起复位，否则按钮/绿点会一直显示「运行中」
+    store.setRunning(id, false)
     toast.error('开价监听已失效，请到「开价话术」页重新开启')
   })
 
@@ -91,6 +93,9 @@ function useGlobalIpcListener() {
 
   useIpcListener(IPC_CHANNELS.tasks.autoReply.listenerStopped, id => {
     setIsListening(id, 'stopped')
+    // 监听停了就等于「自动回复没在跑」，只改监听态不改运行态的话，
+    // 按钮/绿点会一直停在「运行中」，用户点了也没反应
+    setIsRunningAutoReply(id, false)
   })
 
   useIpcListener(IPC_CHANNELS.chrome.saveState, (id, state) => {

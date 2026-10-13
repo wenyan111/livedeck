@@ -58,38 +58,102 @@ export async function comment(
   }
 
   /**
-   * 点击「发送」按钮。评论框填充后发送按钮常会短暂处于禁用/未就绪状态，
-   * 直接点击容易失败导致「监测到却不回复」。这里加重试：点击失败（禁用或找不到）
-   * 时等待片刻再试；穷尽重试仍失败则用「回车」兜底发送。
+   * 点击「发送」按钮，并**校验评论确实发出去了**。
+   *
+   * 历史问题（用户反馈的「话术没发出去」）：这里以前只要在按钮上派发一次
+   * `dispatchEvent('click')` 就直接返回成功，从不回读校验。但很多平台在
+   * 「刚填完内容 / 连续发送 / 按钮短暂禁用 / 只认真实鼠标事件」时，这次 click
+   * 会被丢弃，评论其实没提交，日志却记「发送成功」—— 造成「日志全绿、公屏没有」
+   * 的假成功。现在改为：点击后回读评论框，确认内容已被清空（= 平台确实提交了），
+   * 没有清空就换「真实点击」再试，全都带校验；最后才用回车兜底，同样要校验。
    */
   async function clickSend(page: Page): Result.ResultAsync<boolean, PlatformError> {
     const MAX_TRIES = 4
-    for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+    /** 点击后等待评论框被清空的最长时间（平台提交 + 清空需要一点时间） */
+    const SENT_TIMEOUT_MS = 1500
+    const POLL_MS = 200
+
+    /** 回读评论框：内容里已不含待发消息 → 视为已提交（成功发送的平台都会清空输入框） */
+    async function isCleared(): Promise<boolean> {
+      const taResult = await elementFinder.getCommentTextarea(page)
+      if (Result.isFailure(taResult)) {
+        // 连输入框都读不到，无法判定，保守地不当作已发送
+        return false
+      }
+      let value = ''
+      try {
+        value = await taResult.value.inputValue()
+      } catch {
+        try {
+          value = (await taResult.value.textContent()) ?? ''
+        } catch {
+          return false
+        }
+      }
+      return !value.includes(message)
+    }
+
+    /** 轮询等待评论框清空 */
+    async function waitUntilCleared(): Promise<boolean> {
+      const deadline = Date.now() + SENT_TIMEOUT_MS
+      while (Date.now() < deadline) {
+        await sleep(POLL_MS)
+        if (await isCleared()) {
+          return true
+        }
+      }
+      return false
+    }
+
+    let lastFailure: Result.Result<boolean, PlatformError> = Result.fail(
+      new ElementNotFoundError({ elementName: '发送评论按钮', selector: '' }),
+    )
+
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
       const btnResult = await elementFinder.getClickableSubmitCommentButton(page)
       if (Result.isSuccess(btnResult)) {
-        await btnResult.value.dispatchEvent('click')
-        return Result.succeed(true)
+        // 前两次沿用各平台验证过的 dispatchEvent；后两次改用真实点击
+        // （部分平台只认真实鼠标事件，合成 click 会被吞掉）
+        try {
+          if (attempt >= 3) {
+            await btnResult.value.click({ timeout: 3000 })
+          } else {
+            await btnResult.value.dispatchEvent('click')
+          }
+        } catch {
+          // 派发/点击本身报错不影响后续校验与重试
+        }
+        if (await waitUntilCleared()) {
+          return Result.succeed(true)
+        }
+        lastFailure = Result.fail(
+          new ElementContentMismatchedError({
+            current: '点击发送后评论框未清空（判定未真正发出）',
+            target: message,
+          }),
+        )
+      } else {
+        lastFailure = btnResult
       }
       // 非最后一次：等待按钮启用/出现后重试
-      if (attempt < MAX_TRIES - 1) {
+      if (attempt < MAX_TRIES) {
         await sleep(250)
-        continue
       }
-      // 最后一次兜底：直接按 Enter 发送评论（覆盖「找不到」与「禁用」两种情况）
-      const taResult = await elementFinder.getCommentTextarea(page)
-      if (Result.isSuccess(taResult)) {
+    }
+
+    // 最后兜底：直接按 Enter 发送评论（覆盖「按钮始终找不到/禁用」的情况），同样校验
+    const taResult = await elementFinder.getCommentTextarea(page)
+    if (Result.isSuccess(taResult)) {
+      try {
         await taResult.value.press('Enter')
+      } catch {
+        // 忽略，走失败返回
+      }
+      if (await waitUntilCleared()) {
         return Result.succeed(true)
       }
-      return btnResult
     }
-    // 理论上不会走到这里；仍做一次回车兜底
-    const lastTa = await elementFinder.getCommentTextarea(page)
-    if (Result.isSuccess(lastTa)) {
-      await lastTa.value.press('Enter')
-      return Result.succeed(true)
-    }
-    return Result.fail(new ElementNotFoundError({ elementName: '发送评论按钮', selector: '' }))
+    return lastFailure
   }
 
   /**

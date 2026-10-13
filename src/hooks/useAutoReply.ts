@@ -14,7 +14,6 @@ import {
   type AutoReplyConfig,
   createDefaultConfig as createDefaultAutoReplyConfig,
   type FilterKeywordItem,
-  useAutoReplyConfig,
   useAutoReplyConfigStore,
 } from './useAutoReplyConfig'
 import { useErrorHandler } from './useErrorHandler'
@@ -220,7 +219,8 @@ function sendConfiguredReply(
     const content = getRandomElement(replyMessages)
     if (content) {
       const message = replaceUsername(content, sourceMessage.nick_name, config.hideUsername)
-      sendMessage(accountId, message, errorHandler) // 注意：这里是异步的，但我们不等待它完成
+      // 注意：这里是异步的，但我们不等待它完成（串行由 sendMessage 内部队列保证）
+      sendMessage(accountId, message, errorHandler, sourceMessage.nick_name)
     }
   }
 }
@@ -322,17 +322,113 @@ function getRandomElement<T>(arr: T[]): T | undefined {
   return arr[randomIndex]
 }
 
+/** 单条回复的发送超时：避免某次发送卡死后，后面所有回复永远排在队列里 */
+const SEND_TIMEOUT_MS = 30000
+
+/**
+ * 需要「串行发送回复」的平台。
+ *
+ * 只有**视频号**出现过「界面上生成了回复，直播间里却没发出去」。根因是：
+ * 每条回复各自 invoke 一次 sendReply，主进程 `startTask` 遇到同类型任务正在运行时
+ * 会 **stop() 旧实例**，但 stop() 并不会中断它已经在跑的 Playwright 操作 ——
+ * 于是两个发送任务并发操作**同一个评论输入框**，后一个 fill 覆盖前一个，
+ * 前一个再点发送就把后一条内容发出去（或发出空内容）。
+ *
+ * 其余平台一直正常，按用户要求**不动它们的行为**，只对视频号做串行。
+ */
+const SERIAL_SEND_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set(['wxchannel'])
+
+/** 同一账号的回复发送队列（按账号串行，仅对需要串行的平台启用） */
+const sendQueues = new Map<string, Promise<void>>()
+/** 每个账号排队中的回复数（用于限流，避免发送卡住时无限积压） */
+const sendQueueDepth = new Map<string, number>()
+/** 单个账号最多排队多少条回复，超出的直接丢弃并记日志（宁可不发过期的，也不要刷屏） */
+const MAX_PENDING_SENDS = 10
+
+function writeAutoReplyLog(level: 'info' | 'warn' | 'error' | 'success', message: string) {
+  window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, { level, scope: '自动回复', message })
+}
+
+/** 直接发送一条回复（非串行平台走这里，行为与改动前一致，只多了日志） */
+async function sendMessageDirectly(
+  accountId: string,
+  content: string,
+  errorHandler: ReturnType<typeof useErrorHandler>['handleError'],
+  who: string,
+) {
+  try {
+    await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.sendReply, accountId, content)
+    writeAutoReplyLog('success', `已回复${who}：${content}`)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    writeAutoReplyLog('error', `回复${who}发送失败：${reason}`)
+    errorHandler(err, '自动发送回复失败')
+  }
+}
+
 async function sendMessage(
   accountId: string,
   content: string,
   errorHandler: ReturnType<typeof useErrorHandler>['handleError'],
+  nickname?: string,
 ) {
-  if (!content) return
-  try {
-    await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.sendReply, accountId, content)
-  } catch (err) {
-    errorHandler(err, '自动发送回复失败')
+  const who = nickname ? `观众 [${nickname}] ` : ''
+  if (!content) {
+    // 以前这里是静默 return：界面显示了一条回复，实际什么都没发，日志也查不到
+    writeAutoReplyLog('warn', `${who}的回复内容为空，已跳过发送。`)
+    return
   }
+  // 其他平台维持原来的「直接发送」行为，不做任何改动
+  const platform = useLiveControlStore.getState().contexts[accountId]?.platform
+  if (!platform || !SERIAL_SEND_PLATFORMS.has(platform)) {
+    return sendMessageDirectly(accountId, content, errorHandler, who)
+  }
+
+  const depth = sendQueueDepth.get(accountId) ?? 0
+  if (depth >= MAX_PENDING_SENDS) {
+    writeAutoReplyLog(
+      'warn',
+      `${who}的回复已丢弃：该账号还有 ${depth} 条回复在排队发送（上限 ${MAX_PENDING_SENDS} 条），避免把过期回复刷到公屏。`,
+    )
+    return
+  }
+  sendQueueDepth.set(accountId, depth + 1)
+
+  const prev = sendQueues.get(accountId) ?? Promise.resolve()
+  const next = prev.then(async () => {
+    try {
+      const sent = window.ipcRenderer.invoke(
+        IPC_CHANNELS.tasks.autoReply.sendReply,
+        accountId,
+        content,
+      )
+      await Promise.race([
+        sent,
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`发送超过 ${SEND_TIMEOUT_MS / 1000} 秒未返回`)),
+            SEND_TIMEOUT_MS,
+          )
+        }),
+      ])
+      // 发送成功也要留痕：主进程那行「成功发送第 1/1 条评论」不带昵称，
+      // 出问题时无法回溯这条回复到底是发给谁的。
+      writeAutoReplyLog('success', `已回复${who}：${content}`)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      // 以前只 toast，不写文件日志，事后完全查不到
+      writeAutoReplyLog('error', `回复${who}发送失败：${reason}`)
+      errorHandler(err, '自动发送回复失败')
+    } finally {
+      sendQueueDepth.set(accountId, Math.max(0, (sendQueueDepth.get(accountId) ?? 1) - 1))
+    }
+  })
+  // 队列本身不能被 reject 打断，否则后续回复永远排不进去
+  sendQueues.set(
+    accountId,
+    next.catch(() => {}),
+  )
+  return next
 }
 
 function replaceUsername(content: string, username: string, mask: boolean) {
@@ -392,7 +488,7 @@ const handleKeywordReply = (
     const content = getRandomElement(rule.contents)
     if (content) {
       const message = replaceUsername(content, comment.nick_name, config.hideUsername)
-      sendMessage(accountId, message, errorHandler)
+      sendMessage(accountId, message, errorHandler, comment.nick_name)
       // 注意：关键字回复不通过 addReply 添加到界面，直接发送
       return true // 匹配成功
     }
@@ -406,8 +502,6 @@ const handleKeywordReply = (
 const handleAIReply = async (
   accountId: string,
   comment: CommentMessage,
-  allComments: Message[],
-  allReplies: ReplyPreview[],
   config: AutoReplyConfig,
   {
     provider,
@@ -458,7 +552,12 @@ const handleAIReply = async (
       onReply(replyText)
       // 自动发送
       if (autoSend) {
-        sendMessage(accountId, replyText, errorHandler)
+        sendMessage(accountId, replyText, errorHandler, comment.nick_name)
+      } else {
+        writeAutoReplyLog(
+          'warn',
+          `观众 [${comment.nick_name}] 的回复已生成，但「自动发送」未开启，只显示在界面未发送。`,
+        )
       }
     }
   } catch (err) {
@@ -565,7 +664,6 @@ export function useAutoReply() {
   const store = useAutoReplyStore()
   const { currentAccountId } = useAccounts()
   const aiStore = useAIProvider('autoReply')
-  const { config } = useAutoReplyConfig()
   const { handleError } = useErrorHandler()
 
   const context = useMemo(() => {
@@ -580,7 +678,7 @@ export function useAutoReply() {
     const accountName = useLiveControlStore.getState().contexts[accountId]?.accountName || ''
     const currentContext =
       useAutoReplyStore.getState().contexts[accountId] || createDefaultContext()
-    const { isRunning, comments: allComments, replies: allReplies } = currentContext
+    const { isRunning } = currentContext
 
     // 关键修复：取「评论所属账号」的配置，而非 UI 当前选中账号的配置，
     // 否则切到快手后，抖音等平台的评论会误用快手的配置（过滤关键词为空 → 直接滑到 AI 过滤）。
@@ -600,6 +698,8 @@ export function useAutoReply() {
         // 如果是主播评论就跳过
         comment.nick_name === accountName
       ) {
+        // 以前这里是静默 return：主播自己发的弹幕没回复时，日志里完全查不到原因
+        writeAutoReplyLog('info', `弹幕来自主播本人 [${comment.nick_name}]，跳过不予回复。`)
         return
       }
 
@@ -691,8 +791,6 @@ export function useAutoReply() {
               handleAIReply(
                 accountId,
                 comment,
-                allComments,
-                allReplies,
                 accountConfig,
                 {
                   provider,
@@ -704,6 +802,12 @@ export function useAutoReply() {
                   store.addReply(accountId, comment.msg_id, comment.nick_name, replyContent)
                 },
                 handleError,
+              )
+            } else {
+              // 以前这里是静默不回复：关键字没命中 + AI 回复关闭 = 什么都不做、也不写日志
+              writeAutoReplyLog(
+                'info',
+                `观众 [${comment.nick_name}] 的弹幕 "${commentContent}" 未命中关键字回复，且 AI 回复未开启，跳过不予回复。`,
               )
             }
           }

@@ -1,9 +1,13 @@
 import { Result } from '@praha/byethrow'
 import type { Page } from 'playwright'
-import { ElementContentMismatchedError, ElementNotFoundError, type PlatformError } from '#/errors/PlatformError'
 import { UnexpectedError } from '#/errors/AppError'
-import type { BrowserSession } from '#/managers/BrowserSessionManager'
+import {
+  ElementContentMismatchedError,
+  ElementNotFoundError,
+  type PlatformError,
+} from '#/errors/PlatformError'
 import { createLogger } from '#/logger'
+import type { BrowserSession } from '#/managers/BrowserSessionManager'
 import {
   comment,
   ensurePage,
@@ -24,6 +28,13 @@ import { REGEXPS, SELECTORS, TEXT, URLS } from './constant'
 import { wechatChannelElementFinder as elementFinder } from './element-finder'
 
 const PLATFORM_NAME = '微信视频号' as const
+
+/**
+ * 上墙（置顶评论）相关点击的超时。
+ * 用默认的 30 秒会让一次卡死就耗尽整串开价话术的时间预算，
+ * 上墙失败本就该快速放弃、转为「只发不置顶」，所以给一个短超时。
+ */
+const PIN_CLICK_TIMEOUT_MS = 3000
 
 /**
  * 注入页面的监听脚本：检测「讲解」变为「结束讲解」时触发回调。
@@ -414,9 +425,7 @@ export class WechatChannelPlatform
     this.openPriceOnTrigger = onTrigger
     const pages = this.getOpenPriceWatchPages()
     if (pages.length === 0) {
-      return Result.fail(
-        new ElementNotFoundError({ elementName: '视频号商品列表页 / 中控台页面' }),
-      )
+      return Result.fail(new ElementNotFoundError({ elementName: '视频号商品列表页 / 中控台页面' }))
     }
     return Result.try({
       immediate: true,
@@ -501,31 +510,45 @@ export class WechatChannelPlatform
     if (Result.isFailure(page)) {
       return page
     }
-    // 要先点击“新消息”按钮加载评论！
-    const newCommentButton = await elementFinder.getNewCommentButton(page.value)
-    if (Result.isSuccess(newCommentButton)) {
-      await newCommentButton.value.click()
-    }
-    const els = await elementFinder.getComments(page.value)
-    if (Result.isFailure(els)) {
-      return els
-    }
-    for (const el of els.value.reverse()) {
-      const text = ((await el.textContent()) ?? '').trim()
-      if (comment === text) {
-        // 找到匹配的评论，点击上墙按钮
-        await el.click()
-        const pinCommentActionItem = elementFinder.getPinCommentActionItem(page.value)
-        await pinCommentActionItem.click()
-        return Result.succeed()
+    // 上墙只是「尽力而为」的附加动作，任何一步失败都应该变成 Result.fail 交给上层记 warn，
+    // **绝不能 throw**。
+    // 历史事故：这里三处 click 都用的 Playwright 默认 30 秒超时且没有 try/catch，
+    // 只要元素不可见 / 被遮挡 / iframe 重载就会抛异常，一路冒泡到开价话术任务的
+    // 外层 catch → 整串话术被打断（用户反馈「视频号开价第 2 条没发出去」就是它）。
+    // 现在统一改成短超时 + 转成 Result.fail。
+    try {
+      // 要先点击“新消息”按钮加载评论！
+      const newCommentButton = await elementFinder.getNewCommentButton(page.value)
+      if (Result.isSuccess(newCommentButton)) {
+        await newCommentButton.value.click({ timeout: PIN_CLICK_TIMEOUT_MS })
       }
+      const els = await elementFinder.getComments(page.value)
+      if (Result.isFailure(els)) {
+        return els
+      }
+      for (const el of els.value.reverse()) {
+        const text = ((await el.textContent()) ?? '').trim()
+        if (comment === text) {
+          // 找到匹配的评论，点击上墙按钮
+          await el.click({ timeout: PIN_CLICK_TIMEOUT_MS })
+          const pinCommentActionItem = elementFinder.getPinCommentActionItem(page.value)
+          await pinCommentActionItem.click({ timeout: PIN_CLICK_TIMEOUT_MS })
+          return Result.succeed()
+        }
+      }
+      return Result.fail(
+        new ElementContentMismatchedError({
+          current: '未匹配任何评论',
+          target: comment,
+        }),
+      )
+    } catch (err) {
+      return Result.fail(
+        new UnexpectedError({
+          description: `点击上墙相关元素失败：${err instanceof Error ? err.message : String(err)}`,
+        }),
+      )
     }
-    return Result.fail(
-      new ElementContentMismatchedError({
-        current: '未匹配任何评论',
-        target: comment,
-      }),
-    )
   }
 
   getPinCommentPage(): Page | null {

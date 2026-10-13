@@ -5,7 +5,7 @@ import {
   ElementNotFoundError,
   type PlatformError,
 } from '#/errors/PlatformError'
-import { commonElementFinder, type IElementFinder } from '../IElementFinder'
+import { commonElementFinder, type IElementFinder, queryAcrossFrames } from '../IElementFinder'
 import { SELECTORS } from './constant'
 
 type WechatChannelElementFinder = IElementFinder & {
@@ -69,7 +69,12 @@ export const wechatChannelElementFinder: WechatChannelElementFinder = {
   },
 
   async getClickableSubmitCommentButton(page: Page) {
-    const button = await page.$(SELECTORS.commentInput.SUBMIT_BUTTON)
+    // 视频号中控台整体嵌在 .wujie_iframe 内，评论框和「发送」按钮都在 iframe 里。
+    // 之前这里用 page.$(...) 只在**主框架**里找，永远找不到按钮 —— clickSend 的
+    // 前几次尝试全部落空，最终只能走「回车兜底」；而 textarea 里回车往往只是换行、
+    // 并不提交评论，于是话术根本没发出去却被判为成功（假成功）。
+    // 改为跨所有 frame 查找，才能真正点到「发送」按钮。
+    const button = await queryAcrossFrames(page, [SELECTORS.commentInput.SUBMIT_BUTTON])
     if (!button) {
       return Result.fail(
         new ElementNotFoundError({

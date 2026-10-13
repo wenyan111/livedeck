@@ -28,6 +28,14 @@ const MAX_CONTINUOUS_FAILURES = 3
  * 表现为「第 1 条有、后面全没有」。
  */
 const INTER_MESSAGE_INTERVAL_MS = 3000
+/**
+ * 各平台公屏发言频率限制不同。快手对连发最严格（1~2 条连发常被静默吞掉，
+ * 表现为「第 1 条有、第 2 条没有」），给它更长的间隔以避开冷却。
+ */
+const INTER_MESSAGE_INTERVAL_BY_PLATFORM: Record<string, number> = {
+  快手小店: 6000,
+  小红书: 6000,
+}
 /** 上墙（置顶评论）的最大尝试次数与等待间隔 */
 const PIN_MAX_ATTEMPTS = 3
 const PIN_WAIT_MS = 2500
@@ -56,6 +64,9 @@ export function createOpenPriceMessageTask(
   async function execute() {
     try {
       const { messages } = config
+      const interMessageInterval =
+        INTER_MESSAGE_INTERVAL_BY_PLATFORM[commentPlatform.platformName] ??
+        INTER_MESSAGE_INTERVAL_MS
       /** 本次未成功发出的条号（1 起），结束时汇总提示 */
       const failedIndexes: number[] = []
       let continuousFailures = 0
@@ -130,7 +141,7 @@ export function createOpenPriceMessageTask(
           }
         }
         // 相邻两条之间留足间隔，避开平台公屏发言频率限制
-        await sleep(INTER_MESSAGE_INTERVAL_MS)
+        await sleep(interMessageInterval)
       }
 
       if (failedIndexes.length > 0 && task.isRunning()) {

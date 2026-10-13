@@ -23,6 +23,14 @@ export const QUICK_START_LABELS: Record<QuickStartKey, string> = {
   openPrice: '开价话术',
 }
 
+/** 「一键开启」涉及的全部功能键：展示顺序与批量操作统一按此顺序 */
+export const QUICK_START_KEYS: QuickStartKey[] = [
+  'autoMessage',
+  'autoPopUp',
+  'autoReply',
+  'openPrice',
+]
+
 /** 所有平台（用于初始化每个平台各自的勾选状态） */
 const ALL_PLATFORMS = Object.keys(platformLabels) as LiveControlPlatform[]
 
@@ -269,7 +277,12 @@ function consumePendingResume(
  * 直接复用各页面原本的调用方式（IPC + 对应 store 的运行状态），
  * 保证在首页操作和在各自页面点「开始任务」的效果完全一致。
  */
-function useFeatureControls() {
+/**
+ * 各功能的启动/停止实现，供「一键开启」卡片与「中控台管理」批量操作复用。
+ * 用法：`const { startByKey, stopByKey, getRunning, toast } = useFeatureControls()`，
+ * 再对**任意账号**（不限当前账号）调用 `startByKey[key](accountId)` / `stopByKey[key](accountId)`。
+ */
+export function useFeatureControls() {
   const { toast } = useToast()
 
   const startAutoMessage = useMemoizedFn(async (accountId: string): Promise<StartResult> => {
@@ -497,6 +510,21 @@ function reportResults(
 }
 
 /**
+ * 连接成功到「自动开启功能」之间的缓冲时长（毫秒）。
+ *
+ * 中控台在 `isConnected` 置为已连接的那一刻，页面往往还没渲染完（商品列表 / 评论框 / 按钮等
+ * 都要等接口返回），此时立刻启动任务会「找不到元素」而失败，用户还得手动再点一次。
+ * 这里等页面稳定后再启动，规避这种「刚连上就启动失败」。
+ * 当前 15 秒（视频号页面加载偏慢，8 秒偶发仍会启动失败）；需要更快/更稳时改这一个常量即可。
+ */
+export const AUTO_START_BUFFER_MS = 15000
+
+/** 渲染层简单延时 */
+function delay(ms: number) {
+  return new Promise<void>(resolve => setTimeout(resolve, ms))
+}
+
+/**
  * 连接中控台成功后自动开启功能。放在 App 层执行，这样无论当时停留在哪个页面都能触发。
  *
  * 启动清单 = 「连接后自动开启」勾选的功能 ∪ 断线前正在运行的功能。
@@ -546,6 +574,14 @@ export function useQuickStartAutoStart() {
       if (toStart.length === 0) continue
 
       void (async () => {
+        // 先给平台一点缓冲时间：刚「已连接」时中控台页面常常还没渲染完，
+        // 立刻启动会因找不到元素而失败（用户反馈「直接连有些时候会启动失败、还得再开一次」）。
+        await delay(AUTO_START_BUFFER_MS)
+
+        // 等待期间若账号掉线 / 切了平台，则放弃本次自动开启（重连时会重新触发）。
+        const latest = useLiveControlStore.getState().contexts[accountId]
+        if (latest?.isConnected !== 'connected' || latest?.platform !== platform) return
+
         const results: StartResult[] = []
         for (const key of toStart) {
           results.push(await startByKey[key](accountId))

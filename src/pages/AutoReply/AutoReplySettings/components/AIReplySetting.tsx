@@ -6,6 +6,15 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
+import { PromptSearch } from './PromptSearch'
+
+/**
+ * 提示词输入框的默认高度。
+ *
+ * 提示词动辄几十行，框太小每次都要手动拉开才能看全，所以默认就给足高度；
+ * 手动拖过的高度依然优先，但不会低于这个值（旧版本存下的小高度也会被抬上来）。
+ */
+const MIN_PROMPT_HEIGHT = 400
 
 export function AIReplySetting() {
   const { config, updateAIReplySettings } = useAutoReplyConfig()
@@ -26,21 +35,16 @@ export function AIReplySetting() {
     setPromptHeight(prev => (prev === h ? prev : h))
   })
 
-  // 应用记忆的高度
-  useEffect(() => {
-    const el = promptRef.current
-    if (!el) return
-    el.style.height = promptHeight > 0 ? `${promptHeight}px` : ''
-  }, [promptHeight, aiReplyEnabled])
-
-  // textarea 拖拽改高不会派发 resize 事件，用 ResizeObserver 捕获
+  // 应用记忆的高度 + 监听拖拽（textarea 拖拽改高不会派发 resize 事件，只能用 ResizeObserver）
   useEffect(() => {
     const el = promptRef.current
     if (!el || !aiReplyEnabled) return
+    // 手动拖过的高度照旧保留，但不低于默认高度，避免再出现「每次都要拉开」
+    el.style.height = promptHeight > 0 ? `${Math.max(promptHeight, MIN_PROMPT_HEIGHT)}px` : ''
     const observer = new ResizeObserver(savePromptHeight)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [aiReplyEnabled, savePromptHeight])
+  }, [aiReplyEnabled, promptHeight, savePromptHeight])
   // 处理AI自动回复开关
   const handleAiReplyChange = (checked: boolean) => {
     updateAIReplySettings({ enable: checked })
@@ -89,12 +93,14 @@ export function AIReplySetting() {
       {aiReplyEnabled && (
         <div className="space-y-4">
           <div className="flex items-center space-x-2">提示词配置</div>
+          {/* 提示词条数多时，改某一句容易漏改：先搜一遍，看着清单逐条核对 */}
+          <PromptSearch value={config.comment.aiReply.prompt} textareaRef={promptRef} />
           <Textarea
             ref={promptRef}
             placeholder="输入AI提示词..."
             value={config.comment.aiReply.prompt}
             onChange={e => updateAIReplySettings({ prompt: e.target.value })}
-            className="min-h-[120px]"
+            className="min-h-[400px] resize-y"
           />
           <p className="text-xs text-muted-foreground">提示词将指导AI如何回复用户评论</p>
           <div className="flex justify-between items-center space-x-2">

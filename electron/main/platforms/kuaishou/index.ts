@@ -63,10 +63,13 @@ export class KuaishouPlatform
     throw new Error('Method not implemented.')
   }
 
-  async performComment(message: string, pinTop?: boolean) {
+  async performComment(message: string, _pinTop?: boolean) {
+    // 快手置顶暂时下线：忽略 pinTop，一律按「不置顶」发送。
+    // 原因：快手回复框下方「置顶评论」复选框定位不稳定，置顶成功率低、还可能干扰发送，
+    // 先去掉置顶。参数保留以兼容 IPerformComment 接口，后续要恢复把这里改回 pinTop 即可。
     return Result.pipe(
       ensurePage(this.mainPage),
-      Result.andThen(page => comment(page, elementFinder, message, pinTop)),
+      Result.andThen(page => comment(page, elementFinder, message, false)),
     )
   }
 

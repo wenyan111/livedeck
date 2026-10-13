@@ -1,5 +1,16 @@
 import { useMemoizedFn } from 'ahooks'
-import { Loader2, MonitorSmartphone, Pencil, PlugZap, Plus, Trash2, Unplug } from 'lucide-react'
+import {
+  Loader2,
+  MonitorSmartphone,
+  MoreHorizontal,
+  Pencil,
+  PlayIcon,
+  PlugZap,
+  Plus,
+  SquareIcon,
+  Trash2,
+  Unplug,
+} from 'lucide-react'
 import React, { useEffect, useMemo, useState } from 'react'
 import { platformLabels } from '@/abilities'
 import { Title } from '@/components/common/Title'
@@ -15,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -23,13 +35,30 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useAccounts } from '@/hooks/useAccounts'
+import { useAutoMessageStore } from '@/hooks/useAutoMessage'
+import { useAutoPopUpStore } from '@/hooks/useAutoPopUp'
+import { useAutoReplyStore } from '@/hooks/useAutoReply'
 import { useConnectLiveControl } from '@/hooks/useConnectLiveControl'
 import { useLiveControlStore } from '@/hooks/useLiveControl'
+import { useOpenPriceScriptStore } from '@/hooks/useOpenPriceScript'
+import {
+  isQuickStartSupported,
+  QUICK_START_KEYS,
+  QUICK_START_LABELS,
+  type QuickStartKey,
+  readQuickStartSelection,
+  useFeatureControls,
+  useQuickStartStore,
+} from '@/hooks/useQuickStart'
 import { useToast } from '@/hooks/useToast'
 import { cn } from '@/lib/utils'
+import AccountFeatureToggles from './components/AccountFeatureToggles'
 
 /** 记住上次勾选的账号，免去每次进页面重新勾一遍 */
 const SELECTION_STORAGE_KEY = 'live-control-manage-selected'
+
+/** 账号列表的状态筛选（账号多了以后用来快速只看未连接/已连接） */
+type StatusFilter = 'all' | 'connected' | 'disconnected'
 
 /** 平台下拉选项：生产环境隐藏 dev 测试平台 */
 const PLATFORM_OPTIONS = (() => {
@@ -51,12 +80,12 @@ function readStoredSelection(): Record<string, boolean> {
 
 type ConnStatus = 'connecting' | 'connected' | 'disconnected'
 
-/** 连接状态小徽标（沿用全站绿/黄/灰圆点语义） */
+/** 连接状态徽章：灰=未连接、琥珀呼吸=连接中、绿=已连接 */
 const StatusPill = React.memo(({ status }: { status: ConnStatus }) => {
   if (status === 'connecting') {
     return (
-      <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-warning">
-        <Loader2 className="h-3 w-3 animate-spin" />
+      <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-warning/15 px-2.5 py-[3px] text-xs leading-none text-warning">
+        <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warning" />
         连接中
       </span>
     )
@@ -65,14 +94,14 @@ const StatusPill = React.memo(({ status }: { status: ConnStatus }) => {
   return (
     <span
       className={cn(
-        'flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs',
-        connected ? 'text-success' : 'text-muted-foreground',
+        'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] text-xs leading-none',
+        connected ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground',
       )}
     >
       <span
         className={cn(
-          'h-1.5 w-1.5 rounded-full',
-          connected ? 'bg-success' : 'bg-muted-foreground/40',
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          connected ? 'bg-success' : 'bg-muted-foreground/50',
         )}
       />
       {connected ? '已连接' : '未连接'}
@@ -88,9 +117,37 @@ export default function LiveControlManage() {
   const contexts = useLiveControlStore(s => s.contexts)
   const setPlatform = useLiveControlStore(s => s.setPlatform)
   const { connectAccount, disconnectAccount } = useConnectLiveControl()
+  // 每账号的「一键开启/停止」：复用首页「一键开启」的启动/停止实现，按各账号 × 平台各自的勾选操作
+  const selectionMap = useQuickStartStore(s => s.selection)
+  const { startByKey, stopByKey, getRunning } = useFeatureControls()
   const { toast } = useToast()
 
+  // 运行状态必须「订阅」，不能靠 getRunning() 里的 getState() 读快照。
+  // 历史 bug：按钮的 anyRunning 是在渲染时用 getRunning()（内部 getState() 读一次）算出来的，
+  // 功能启动/停止不会让本页面重渲染 —— 于是出现「账号行下方绿点已经亮了（那个子组件自己订阅、
+  // 实时更新），右侧按钮却还停在『一键开启』」，点了还会弹「没有可开启的功能」。
+  // 这里订阅整份 contexts/runtime（引用稳定），页面就会随运行状态变化而重渲染。
+  const autoMessageContexts = useAutoMessageStore(s => s.contexts)
+  const autoPopUpContexts = useAutoPopUpStore(s => s.contexts)
+  const autoReplyContexts = useAutoReplyStore(s => s.contexts)
+  const openPriceRuntime = useOpenPriceScriptStore(s => s.runtime)
+
+  /** 渲染用的运行状态（响应式）：与下方勾选行同源，保证按钮与绿点永远一致 */
+  const isRunningOf = (key: QuickStartKey, id: string): boolean => {
+    switch (key) {
+      case 'autoMessage':
+        return Boolean(autoMessageContexts[id]?.isRunning)
+      case 'autoPopUp':
+        return Boolean(autoPopUpContexts[id]?.isRunning)
+      case 'autoReply':
+        return Boolean(autoReplyContexts[id]?.isRunning)
+      case 'openPrice':
+        return Boolean(openPriceRuntime[id]?.isRunning)
+    }
+  }
+
   const [selected, setSelected] = useState<Record<string, boolean>>(() => readStoredSelection())
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 
   // 账号增删改对话框
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -118,6 +175,22 @@ export default function LiveControlManage() {
 
   const statusOf = (id: string): ConnStatus => contexts[id]?.isConnected ?? 'disconnected'
   const platformOf = (id: string): LiveControlPlatform => contexts[id]?.platform ?? 'douyin'
+
+  /** 该账号 × 平台下要操作的功能：已勾选 + 该平台支持（与账号行下方的勾选同源） */
+  const keysOf = (id: string) => {
+    const platform = platformOf(id)
+    const selection = readQuickStartSelection(selectionMap, id, platform)
+    return QUICK_START_KEYS.filter(key => selection[key] && isQuickStartSupported(key, platform))
+  }
+
+  const visibleAccounts = useMemo(
+    () =>
+      accounts.filter(a => {
+        if (statusFilter === 'all') return true
+        return (contexts[a.id]?.isConnected ?? 'disconnected') === statusFilter
+      }),
+    [accounts, statusFilter, contexts],
+  )
 
   const selectedAccounts = useMemo(() => accounts.filter(a => selected[a.id]), [accounts, selected])
   const connectableCount = selectedAccounts.filter(a => statusOf(a.id) === 'disconnected').length
@@ -165,6 +238,42 @@ export default function LiveControlManage() {
     const failList = results.filter(r => !r.ok).map(r => r.name)
     if (okList.length > 0) toast.success(`已断开：${okList.join('、')}`)
     if (failList.length > 0) toast.error(`断开失败：${failList.join('、')}`)
+  })
+
+  /** 单个账号的一键开启 / 停止：开启=启动该账号勾选且未运行的功能；停止=停掉正在运行的 */
+  const runForAccount = useMemoizedFn(async (account: Account, mode: 'start' | 'stop') => {
+    const okList: string[] = []
+    const failList: string[] = []
+    for (const key of keysOf(account.id)) {
+      const running = getRunning(key, account.id)
+      if (mode === 'start' && running) continue
+      if (mode === 'stop' && !running) continue
+      const label = QUICK_START_LABELS[key]
+      if (mode === 'start') {
+        const r = await startByKey[key](account.id)
+        if (r.ok) okList.push(label)
+        else failList.push(`${label}(${r.reason ?? '失败'})`)
+      } else {
+        try {
+          await stopByKey[key](account.id)
+          okList.push(label)
+        } catch {
+          failList.push(label)
+        }
+      }
+    }
+    const verb = mode === 'start' ? '开启' : '停止'
+    if (okList.length > 0) toast.success(`${account.name} 已${verb}：${okList.join('、')}`)
+    if (failList.length > 0) toast.error(`${account.name} ${verb}失败：${failList.join('；')}`)
+    if (okList.length === 0 && failList.length === 0) {
+      // 说明勾选的功能本来就全在运行（或全没运行），把原因说清楚，
+      // 别再出现含糊的「没有可开启的功能」
+      toast.error(
+        mode === 'start'
+          ? `${account.name} 勾选的功能都已开启，无需重复启动`
+          : `${account.name} 勾选的功能都没有在运行`,
+      )
+    }
   })
 
   const handleConnectOne = useMemoizedFn(async (account: Account) => {
@@ -248,21 +357,33 @@ export default function LiveControlManage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* 操作区 */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="live-control-manage-select-all"
-                checked={allSelected}
-                onCheckedChange={v => toggleAll(Boolean(v))}
-                disabled={accounts.length === 0}
-              />
-              <label htmlFor="live-control-manage-select-all" className="cursor-pointer text-sm">
-                全选
-              </label>
-              <span className="text-xs text-muted-foreground">
-                已选 {selectedAccounts.length} / {accounts.length}
-              </span>
+          {/* 工具栏：全选 + 筛选 在左，批量操作在右（与单个账号的操作分层） */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="live-control-manage-select-all"
+                  checked={allSelected}
+                  onCheckedChange={v => toggleAll(Boolean(v))}
+                  disabled={accounts.length === 0}
+                />
+                <label htmlFor="live-control-manage-select-all" className="cursor-pointer text-sm">
+                  全选
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  已选 {selectedAccounts.length} / {accounts.length}
+                </span>
+              </div>
+              <Select value={statusFilter} onValueChange={v => setStatusFilter(v as StatusFilter)}>
+                <SelectTrigger className="h-7 w-[104px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="connected">只看已连接</SelectItem>
+                  <SelectItem value="disconnected">只看未连接</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -287,35 +408,49 @@ export default function LiveControlManage() {
             </div>
           </div>
 
-          <div className="h-px bg-border" />
-
           {accounts.length === 0 ? (
             <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
               还没有账号，点击右上角「添加账号」新建一个吧
             </p>
+          ) : visibleAccounts.length === 0 ? (
+            <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
+              当前筛选下没有账号
+            </p>
           ) : (
             <div className="space-y-2">
-              {accounts.map(account => {
+              {visibleAccounts.map(account => {
                 const status = statusOf(account.id)
                 const connected = status === 'connected'
                 const connecting = status === 'connecting'
                 const isDefault = account.id === 'default'
+                const platform = platformOf(account.id)
+                // 未连接时一律按「没在运行」算：断线会停掉所有任务，
+                // 万一状态没复位也不会把按钮卡在「一键停止」
+                // 注意：这里必须用**响应式**的 isRunningOf（订阅来的），不能用 getRunning()，
+                // 否则功能启动后按钮文字不会跟着变（见上面 isRunningOf 处的说明）。
+                const runningKeys = keysOf(account.id).filter(k => isRunningOf(k, account.id))
+                const anyRunning = connected && runningKeys.length > 0
+                const canStart = keysOf(account.id).some(k => !isRunningOf(k, account.id))
                 return (
                   <div
                     key={account.id}
-                    className="flex items-center gap-3 rounded-md border px-3 py-2.5"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5 transition-colors hover:border-border hover:bg-accent/40"
                   >
                     <Checkbox
                       id={`live-control-manage-${account.id}`}
                       checked={Boolean(selected[account.id])}
                       onCheckedChange={v => toggleAccount(account.id, Boolean(v))}
                     />
+                    {/* 平台徽标：比整块下拉更省地方，一眼区分平台 */}
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-medium">
+                      {platformLabels[platform]?.[0] ?? '?'}
+                    </span>
                     <Select
-                      value={platformOf(account.id)}
+                      value={platform}
                       onValueChange={value => setPlatform(account.id, value as LiveControlPlatform)}
                       disabled={status !== 'disconnected'}
                     >
-                      <SelectTrigger className="h-8 w-[128px]">
+                      <SelectTrigger className="h-7 w-[104px] text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -328,10 +463,16 @@ export default function LiveControlManage() {
                     </Select>
                     <label
                       htmlFor={`live-control-manage-${account.id}`}
-                      className="flex-1 cursor-pointer truncate font-medium"
+                      className="min-w-0 flex-1 cursor-pointer truncate font-medium"
                     >
                       {account.name}
                     </label>
+                    {/* 该账号的功能开关（与首页「一键开启」卡片同源，实时同步） */}
+                    <AccountFeatureToggles
+                      accountId={account.id}
+                      platform={platform}
+                      connected={connected}
+                    />
                     <StatusPill status={status} />
                     {connected ? (
                       <Button
@@ -357,29 +498,62 @@ export default function LiveControlManage() {
                         )}
                       </Button>
                     )}
-                    {/* 账号编辑：重命名 / 删除 */}
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground"
-                        title="重命名"
-                        onClick={() => setEditing({ id: account.id, name: account.name })}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      {!isDefault && (
+                    {/* 重命名 / 删除收进「更多」，避免误点红色的删除 */}
+                    <Popover>
+                      <PopoverTrigger asChild>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-destructive"
-                          title="删除账号"
-                          onClick={() => setDeleting({ id: account.id, name: account.name })}
+                          className="h-7 w-7 text-muted-foreground"
+                          title="更多操作"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <MoreHorizontal className="h-4 w-4" />
                         </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-32 p-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-start"
+                          onClick={() => setEditing({ id: account.id, name: account.name })}
+                        >
+                          <Pencil className="mr-2 h-4 w-4" />
+                          重命名
+                        </Button>
+                        {!isDefault && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start text-destructive"
+                            onClick={() => setDeleting({ id: account.id, name: account.name })}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除
+                          </Button>
+                        )}
+                      </PopoverContent>
+                    </Popover>
+                    {/* 一键开启 / 停止：只作用于此账号。
+                        未连接时用灰色描边——绿色代表「可开启」，没连接时不该给绿色误导。 */}
+                    <Button
+                      size="sm"
+                      variant={anyRunning ? 'destructive' : connected ? 'success' : 'outline'}
+                      disabled={!connected || (!anyRunning && !canStart)}
+                      title={connected ? undefined : '请先连接中控台'}
+                      onClick={() => void runForAccount(account, anyRunning ? 'stop' : 'start')}
+                    >
+                      {anyRunning ? (
+                        <>
+                          <SquareIcon className="mr-1.5 h-4 w-4" />
+                          一键停止
+                        </>
+                      ) : (
+                        <>
+                          <PlayIcon className="mr-1.5 h-4 w-4" />
+                          一键开启
+                        </>
                       )}
-                    </div>
+                    </Button>
                   </div>
                 )
               })}
