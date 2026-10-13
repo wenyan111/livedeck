@@ -1,11 +1,36 @@
 import { Result } from '@praha/byethrow'
 import type { ScopedLogger } from '#/logger'
-import { isPerformComment, isPinComment, type IPlatform } from '#/platforms/IPlatform'
+import { type IPlatform, isPerformComment, isPinComment } from '#/platforms/IPlatform'
 import { replaceVariant, sleep } from '#/utils'
 import { createTask } from './BaseTask'
 import { TaskStopReason } from './ITask'
 
 const TASK_NAME = '开价话术'
+
+/**
+ * 单条话术的最大尝试次数。
+ * 之前任一条发送失败就直接 `stop(ERROR)`，导致**后面的话术一条都不发**（用户反馈的
+ * 「从某条起后面全没有」就是这个原因）。改为失败重试，重试仍失败则跳过继续。
+ */
+const MAX_ATTEMPTS_PER_MESSAGE = 3
+/** 同一条话术两次尝试之间的等待 */
+const RETRY_INTERVAL_MS = 2000
+/**
+ * 连续失败多少条后放弃本次发送。
+ * 偶尔一条失败可以跳过，但如果连续多条都失败，多半是中控台页面已失效 /
+ * 浏览器掉线，继续重试只是无意义空转。
+ */
+const MAX_CONTINUOUS_FAILURES = 3
+/**
+ * 相邻两条话术之间的间隔。
+ * 各平台公屏发言都有频率限制（普遍 3~5 秒），之前只等 1 秒，
+ * 后续几条容易被平台静默吞掉（发送动作报成功、公屏却没有），
+ * 表现为「第 1 条有、后面全没有」。
+ */
+const INTER_MESSAGE_INTERVAL_MS = 3000
+/** 上墙（置顶评论）的最大尝试次数与等待间隔 */
+const PIN_MAX_ATTEMPTS = 3
+const PIN_WAIT_MS = 2500
 
 /**
  * 开价变预热时，按顺序把配置的话术发送到直播间公屏。
@@ -31,32 +56,87 @@ export function createOpenPriceMessageTask(
   async function execute() {
     try {
       const { messages } = config
+      /** 本次未成功发出的条号（1 起），结束时汇总提示 */
+      const failedIndexes: number[] = []
+      let continuousFailures = 0
+
       for (let i = 0; i < messages.length; i++) {
         if (!task.isRunning()) {
           break
         }
         const message = replaceVariant(messages[i].content)
         const pinTop = messages[i].pinTop
-        const result = await commentPlatform.performComment(message, pinTop)
-        if (Result.isFailure(result)) {
-          return task.stop(TaskStopReason.ERROR, result.error)
-        }
-        logger.success(
-          `成功发送第 ${i + 1}/${messages.length} 条话术：${message}${pinTop ? '（已置顶）' : ''}`,
-        )
-        // 抖音等平台由 performComment 直接置顶；视频号等平台需额外「上墙」。
-        if (pinTop && isPinComment(commentPlatform)) {
-          // 等待刚发送的评论渲染到公屏评论列表，再按内容匹配上墙
-          await sleep(1500)
-          const pinResult = await commentPlatform.pinComment(message)
-          if (Result.isFailure(pinResult)) {
-            logger.warn(`第 ${i + 1} 条话术上墙失败：${pinResult.error}`)
-          } else {
-            logger.success(`第 ${i + 1} 条话术已上墙`)
+
+        // 单条失败不再中断整串：重试若干次，仍失败才跳过继续
+        let sent = false
+        let lastError: unknown
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MESSAGE; attempt++) {
+          if (!task.isRunning()) {
+            break
+          }
+          const result = await commentPlatform.performComment(message, pinTop)
+          if (Result.isSuccess(result)) {
+            sent = true
+            break
+          }
+          lastError = result.error
+          if (attempt < MAX_ATTEMPTS_PER_MESSAGE) {
+            logger.warn(
+              `第 ${i + 1}/${messages.length} 条话术第 ${attempt}/${MAX_ATTEMPTS_PER_MESSAGE} 次发送失败，${RETRY_INTERVAL_MS / 1000} 秒后重试：${lastError}`,
+            )
+            await sleep(RETRY_INTERVAL_MS)
           }
         }
-        // 以防万一，加一个 1s 的小停顿
-        await sleep(1000)
+
+        if (!task.isRunning()) {
+          break
+        }
+
+        if (!sent) {
+          failedIndexes.push(i + 1)
+          continuousFailures += 1
+          logger.error(
+            `第 ${i + 1}/${messages.length} 条话术发送失败（已尝试 ${MAX_ATTEMPTS_PER_MESSAGE} 次），跳过并继续后续话术：${lastError}`,
+          )
+          if (continuousFailures >= MAX_CONTINUOUS_FAILURES) {
+            logger.error(
+              `已连续 ${continuousFailures} 条话术发送失败，判定中控台页面异常，停止本次开价话术发送`,
+            )
+            break
+          }
+        } else {
+          continuousFailures = 0
+          logger.success(
+            `成功发送第 ${i + 1}/${messages.length} 条话术：${message}${pinTop ? '（请求置顶）' : ''}`,
+          )
+          // 抖音 / 快手等平台由 performComment 直接置顶；视频号等平台需额外「上墙」。
+          if (pinTop && isPinComment(commentPlatform)) {
+            let pinned = false
+            for (let attempt = 1; attempt <= PIN_MAX_ATTEMPTS; attempt++) {
+              // 等刚发送的评论渲染到公屏评论列表，再按内容匹配上墙
+              await sleep(PIN_WAIT_MS)
+              const pinResult = await commentPlatform.pinComment(message)
+              if (Result.isSuccess(pinResult)) {
+                pinned = true
+                break
+              }
+              lastError = pinResult.error
+            }
+            if (pinned) {
+              logger.success(`第 ${i + 1} 条话术已上墙`)
+            } else {
+              logger.warn(`第 ${i + 1} 条话术上墙失败：${lastError}`)
+            }
+          }
+        }
+        // 相邻两条之间留足间隔，避开平台公屏发言频率限制
+        await sleep(INTER_MESSAGE_INTERVAL_MS)
+      }
+
+      if (failedIndexes.length > 0 && task.isRunning()) {
+        logger.warn(
+          `本次开价话术共 ${messages.length} 条，其中第 ${failedIndexes.join('、')} 条未能发出，请留意公屏`,
+        )
       }
       task.stop(TaskStopReason.COMPLETED)
     } catch (error) {

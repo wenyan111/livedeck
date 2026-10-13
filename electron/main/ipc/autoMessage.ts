@@ -97,34 +97,27 @@ function setupIpcHandlers() {
 
   // 跨平台开价联动：让指定账号直接把开价话术发出去，不启动任何监听。
   // 触发源（如巨量百应）检测到开价后，由渲染层并行通知各跟随平台调用此接口。
+  // 注意：必须走 AccountSession 的发送锁入口（不能裸调 startTask）——
+  // startTask 会先 stop 同类型的运行中任务，直接调用会把正在发送的话术掐断。
   typedIpcMainHandle(
     IPC_CHANNELS.tasks.autoMessage.sendOpenPriceMessages,
     async (_, accountId, messages) => {
       if (!messages || messages.length === 0) {
         return false
       }
-      return Result.pipe(
-        accountManager.getSession(accountId),
-        Result.andThen(accountSession =>
-          accountSession.startTask({
-            type: 'send-open-price-messages',
-            config: { messages },
-          }),
-        ),
-        Result.inspect(() => {
-          const logger = createLogger(`@${accountManager.getAccountName(accountId)}`).scope(
-            '开价联动',
-          )
-          logger.success(`联动发送开价话术 ${messages.length} 条`)
-        }),
-        Result.inspectError(error => {
-          const logger = createLogger(`@${accountManager.getAccountName(accountId)}`).scope(
-            '开价联动',
-          )
-          logger.error('联动发送开价话术失败：', error)
-        }),
-        r => r.then(Result.isSuccess),
-      )
+      const logger = createLogger(`@${accountManager.getAccountName(accountId)}`).scope('开价联动')
+      const session = accountManager.getSession(accountId)
+      if (Result.isFailure(session)) {
+        logger.error('联动发送开价话术失败：未找到该账号的会话')
+        return false
+      }
+      const ok = await session.value.sendOpenPriceMessagesFromLinkage(messages)
+      if (ok) {
+        logger.success(`联动发送开价话术 ${messages.length} 条`)
+      } else {
+        logger.error('联动发送开价话术失败')
+      }
+      return ok
     },
   )
 

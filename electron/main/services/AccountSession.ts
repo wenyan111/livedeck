@@ -351,38 +351,73 @@ export class AccountSession {
     }
   }
 
+  /** 页面内监听检测到「开价变预热」时的回调 */
   private async handleOpenPriceTrigger(): Promise<void> {
+    await this.dispatchOpenPriceMessages(this.openPriceMessages, 'watcher')
+  }
+
+  /**
+   * 联动下发开价话术（渲染层 fanout 调用）。
+   *
+   * 必须与自身检测走**同一把发送锁**：`startTask` 遇到同类型任务正在运行时会先
+   * `stop()` 掉旧实例（防幽灵任务的机制），如果联动下发绕过锁直接 startTask，
+   * 一次开价因重复广播 / 联动叠加触发第二次下发的瞬间，就会把**正在发送中**的
+   * 开价话术任务掐断 —— 公屏表现为「第 1 条发出、后面全没有」。
+   */
+  public async sendOpenPriceMessagesFromLinkage(
+    messages: { content: string; pinTop: boolean }[],
+  ): Promise<boolean> {
+    return this.dispatchOpenPriceMessages(messages, 'linkage')
+  }
+
+  /**
+   * 发送开价话术的统一入口。
+   * @param source `watcher` = 页面监听自身检测到开价；`linkage` = 渲染层联动下发
+   */
+  private async dispatchOpenPriceMessages(
+    messages: { content: string; pinTop: boolean }[],
+    source: 'watcher' | 'linkage',
+  ): Promise<boolean> {
+    const label = source === 'watcher' ? '检测到开价变预热' : '联动触发'
     // 发送锁兜底：上一次发送若因页面卡住没结束，超时后强制释放
     if (this.openPriceSending) {
       const hung =
         this.openPriceSendingSince > 0 &&
         Date.now() - this.openPriceSendingSince > OPEN_PRICE_SEND_TIMEOUT_MS
       if (!hung) {
-        return
+        // 正在发送中：直接跳过本次触发，绝不打断（重复触发往往是广播抖动，
+        // 掐断反而会把后半段话术丢掉）
+        this.logger.warn(
+          `${label}：上一次开价话术仍在发送中，本次触发已跳过（不打断正在发送的话术）`,
+        )
+        return true
       }
       this.logger.warn(
         `上一次开价话术发送超过 ${OPEN_PRICE_SEND_TIMEOUT_MS / 1000} 秒未结束，强制释放发送锁`,
       )
       this.releaseSendingLock()
     }
-    if (!this.openPriceRunning) {
-      return
+    // 自身检测要求监听仍在运行；联动下发不受此限制（跟随端可能没开自身监听）
+    if (source === 'watcher' && !this.openPriceRunning) {
+      return false
     }
     // 置顶决策已由渲染层在发送前算好（首条是否置顶取决于「置顶首条话术」开关，
     // 其余沿用各自置顶设置），主进程原样转发，保持原有相对顺序
-    const toSend = this.openPriceMessages.map(m => ({
+    const toSend = messages.map(m => ({
       content: m.content,
       pinTop: m.pinTop,
     }))
     if (toSend.length === 0) {
-      this.logger.warn('检测到开价变预热，但当前没有可发送的话术')
-      return
+      this.logger.warn(`${label}，但当前没有可发送的话术`)
+      return false
     }
     const pinCount = toSend.filter(m => m.pinTop).length
     this.logger.success(
-      `检测到开价变预热，开始按顺序发送全部话术（共 ${toSend.length} 条，其中置顶 ${pinCount} 条）`,
+      `${label}，开始按顺序发送全部话术（共 ${toSend.length} 条，其中置顶 ${pinCount} 条）`,
     )
-    windowManager.send(IPC_CHANNELS.tasks.autoMessage.openPriceWarmupTriggered, this.account.id)
+    if (source === 'watcher') {
+      windowManager.send(IPC_CHANNELS.tasks.autoMessage.openPriceWarmupTriggered, this.account.id)
+    }
     this.openPriceSending = true
     this.openPriceSendingSince = Date.now()
     const started = await this.startTask({
@@ -392,7 +427,7 @@ export class AccountSession {
     if (Result.isFailure(started)) {
       this.logger.error('开价话术发送任务启动失败：', started.error)
       this.releaseSendingLock()
-      return
+      return false
     }
     const task = this.activeTasks.get('send-open-price-messages')
     if (task) {
@@ -405,6 +440,7 @@ export class AccountSession {
     } else {
       this.releaseSendingLock()
     }
+    return true
   }
 
   /** 释放开价话术发送锁 */
