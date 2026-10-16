@@ -43,7 +43,13 @@
 
 ### 下载安装
 
-访问 [Releases](https://github.com/wenyan111/livedeck/releases/latest) 页面下载最新版本安装包
+访问 [Releases](https://github.com/wenyan111/livedeck/releases/latest) 页面下载最新版本安装包。
+
+> **macOS 安装提示**：Mac 版为 `.dmg` 安装包（文件名形如 `livedeck-x.x.x-mac-arm64.dmg`）。由于应用未经过 Apple 公证，首次打开常会被 Gatekeeper 拦截，提示「无法打开，因为无法验证开发者」或「已损坏」。解决办法：
+> 1. 双击打开 `.dmg`，把 **LiveDeck・直播台** 拖入「应用程序」文件夹；
+> 2. 在「启动台 / 应用程序」里**右键**点击 LiveDeck → 选择「打开」（首次会再弹一次确认，点「打开」即可）；
+> 3. 若仍被拦截，前往 **系统设置 → 隐私与安全性**，在「安全性」区域点击「仍要打开」。
+> 之后即可正常启动，不会再弹警告。
 
 ### 源码构建
 
@@ -52,8 +58,14 @@ git clone https://github.com/wenyan111/livedeck.git
 cd livedeck
 pnpm install
 pnpm build
-# 构建在项目根目录的 /release 文件夹下
+# 构建产物在项目根目录的 /release 文件夹下
 ```
+
+> **从源码安装到 macOS 应用程序**：`pnpm build` 完成后，可在 `/release/<版本>/mac-arm64/` 下找到 `LiveDeck・直播台.app`（或同目录的 `.dmg`）。把 `.app` 拖入 `/Applications` 即可使用；若启动提示「已损坏 / 隔离」，在终端执行一次：
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/LiveDeck・直播台.app"
+> ```
+> 然后重新打开即可。
 
 
 ## 📖 使用方法
