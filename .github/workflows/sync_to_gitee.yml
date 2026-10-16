@@ -1,10 +1,16 @@
 name: sync to gitee
+
+# 镜像 GitHub(wenyan111/livedeck) -> Gitee(<GITEE_USERNAME>/livedeck)
+# 依赖 GitHub 仓库 Secrets（缺一不可，否则第 3 步会稳定失败）：
+#   GITEE_USERNAME  : 你的 Gitee 登录用户名（仓库会建在这个账号下，名为 livedeck）
+#   GITEE_TOKEN     : Gitee 个人访问令牌(PAT)，需 api 权限（用于自动创建/更新仓库）
+#   GITEE_PRIVATE_KEY: 推送到 Gitee 的 SSH 私钥（对应公钥需加到 Gitee 账号 SSH 公钥里）
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-  
+
 jobs:
   repo-sync:
     runs-on: ubuntu-latest
@@ -13,12 +19,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: sync github -> gitee
-        uses: Yikun/hub-mirror-action@master
+        uses: Yikun/hub-mirror-action@ec47170fa9d126a4bee5a1ab9359845bb1395248 # v1.5
         with:
           src: 'github/${{ github.repository_owner }}'
           dst: 'gitee/${{ secrets.GITEE_USERNAME }}'
           dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
-          dst_token:  ${{ secrets.GITEE_TOKEN }}
+          dst_token: ${{ secrets.GITEE_TOKEN }}
           static_list: 'livedeck'
           force_update: true
-          
+          account_type: user
+          # 打开 debug 便于排查；首次同步成功后可将此行删掉
+          debug: true
