@@ -28,5 +28,3 @@ jobs:
           static_list: 'livedeck'
           force_update: true
           account_type: user
-          # 打开 debug 便于排查；首次同步成功后可将此行删掉
-          debug: true
