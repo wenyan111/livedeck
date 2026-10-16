@@ -51,6 +51,8 @@ function setupIpcHandlers() {
       logger.warn(message)
     } else if (level === 'success') {
       logger.success(message)
+    } else if (level === 'debug') {
+      logger.debug(message)
     } else {
       logger.info(message)
     }

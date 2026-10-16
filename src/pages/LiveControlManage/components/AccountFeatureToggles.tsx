@@ -1,5 +1,6 @@
 import React from 'react'
 import { openPricePlatforms, openPriceSelfDetectPlatforms } from '@/abilities'
+import FeaturePill from '@/components/common/FeaturePill'
 import { useAutoMessageStore } from '@/hooks/useAutoMessage'
 import { useAutoPopUpStore } from '@/hooks/useAutoPopUp'
 import { useAutoReplyStore } from '@/hooks/useAutoReply'
@@ -11,7 +12,6 @@ import {
   readQuickStartSelection,
   useQuickStartStore,
 } from '@/hooks/useQuickStart'
-import { cn } from '@/lib/utils'
 
 /**
  * 账号行下方的紧凑功能勾选（自动发言 / 自动弹窗 / 自动回复 / 开价话术）。
@@ -57,32 +57,18 @@ const AccountFeatureToggles = React.memo(
         {keys.map(key => {
           const disabled = key === 'openPrice' && !openPriceSelfDetectPlatforms.includes(platform)
           const checked = disabled ? false : Boolean(selection[key])
-          const id = `acct-feat-${accountId}-${key}`
           return (
-            <button
+            <FeaturePill
               key={key}
-              type="button"
-              id={id}
+              id={`acct-feat-${accountId}-${key}`}
+              label={QUICK_START_LABELS[key]}
+              checked={checked}
               disabled={disabled}
-              title={disabled ? '由跨平台开价联动触发，无需在此启动' : undefined}
-              onClick={() => toggle(accountId, platform, key, !checked)}
-              className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-xs leading-none transition-colors',
-                disabled
-                  ? 'cursor-not-allowed border-border/40 text-muted-foreground/50'
-                  : checked
-                    ? // 已勾选：珊瑚色实心胶囊（品牌色），和「运行中绿点 / 停止红色」语义分开，一眼可辨
-                      'border-brand/45 bg-brand/15 font-medium text-brand hover:bg-brand/25'
-                    : // 未勾选：只留浅描边，明显弱于已勾选
-                      'border-border/40 text-muted-foreground hover:border-border hover:text-foreground',
-              )}
-            >
-              {/* 运行中才亮绿点（未连接一律不亮）：一眼看出该账号下哪些功能真跑起来了 */}
-              {connected && runningMap[key] && (
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" title="运行中" />
-              )}
-              {QUICK_START_LABELS[key]}
-            </button>
+              disabledTitle={disabled ? '由跨平台开价联动触发，无需在此启动' : undefined}
+              connected={connected}
+              running={runningMap[key]}
+              onToggle={() => toggle(accountId, platform, key, !checked)}
+            />
           )
         })}
       </div>

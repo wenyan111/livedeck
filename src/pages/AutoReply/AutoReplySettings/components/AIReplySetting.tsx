@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { PromptSearch } from './PromptSearch'
+import { SyncPromptDialog } from './SyncPromptDialog'
 
 /**
  * 提示词输入框的默认高度。
@@ -92,7 +93,11 @@ export function AIReplySetting() {
       </div>
       {aiReplyEnabled && (
         <div className="space-y-4">
-          <div className="flex items-center space-x-2">提示词配置</div>
+          {/* 标题行右侧放「一键同步配置词」：把当前提示词勾选同步到其他已创建账号 */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">提示词配置</div>
+            <SyncPromptDialog prompt={config.comment.aiReply.prompt} />
+          </div>
           {/* 提示词条数多时，改某一句容易漏改：先搜一遍，看着清单逐条核对 */}
           <PromptSearch value={config.comment.aiReply.prompt} textareaRef={promptRef} />
           <Textarea

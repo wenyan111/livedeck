@@ -159,7 +159,7 @@ export interface IpcChannels {
   [IPC_CHANNELS.app.getProviders]: () => Record<string, ProviderInfo>
   [IPC_CHANNELS.app.providersUpdated]: (providers: Record<string, ProviderInfo>) => void
   [IPC_CHANNELS.app.writeLog]: (params: {
-    level: 'info' | 'warn' | 'error' | 'success'
+    level: 'info' | 'warn' | 'error' | 'success' | 'debug'
     message: string
     scope?: string
   }) => void

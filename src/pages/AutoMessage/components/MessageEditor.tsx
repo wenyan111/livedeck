@@ -10,10 +10,13 @@ export default function MessageEditor({
   messages,
   unlimitedLength,
   onChange,
+  rightSlot,
 }: {
   messages: Message[]
   unlimitedLength: boolean
   onChange: (messages: Message[]) => void
+  /** 渲染在编辑框右侧、与首行对齐的附加控件（如开价话术的「置顶首条话术」开关） */
+  rightSlot?: React.ReactNode
 }) {
   const [localMessages, setLocalMessages] = useState<Message[]>(messages)
   const [text, setText] = useState(() => messages.map(msg => msg.content).join('\n'))
@@ -97,7 +100,10 @@ export default function MessageEditor({
                     fill="currentColor"
                   />
                 ) : (
-                  <PinOffIcon size={16} className="text-muted-foreground group-hover:text-foreground/70" />
+                  <PinOffIcon
+                    size={16}
+                    className="text-muted-foreground group-hover:text-foreground/70"
+                  />
                 )}
                 <span className="ml-2">{i + 1}</span>
               </button>
@@ -119,6 +125,13 @@ export default function MessageEditor({
           className="bg-background flex-1 outline-none resize-none px-2 py-1 text-sm whitespace-pre border-l no-scrollbar"
           style={{ lineHeight: '2rem' }}
         />
+
+        {/* 右侧插槽：与首行严格对齐（左侧序号列同样是 py-1 + h-8） */}
+        {rightSlot ? (
+          <div className="flex shrink-0 items-start border-l px-3 py-1">
+            <div className="flex h-8 items-center gap-2 whitespace-nowrap">{rightSlot}</div>
+          </div>
+        ) : null}
       </div>
       {!unlimitedLength && (
         <div className="mt-1 space-y-1">

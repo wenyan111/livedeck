@@ -345,7 +345,10 @@ const sendQueueDepth = new Map<string, number>()
 /** 单个账号最多排队多少条回复，超出的直接丢弃并记日志（宁可不发过期的，也不要刷屏） */
 const MAX_PENDING_SENDS = 10
 
-function writeAutoReplyLog(level: 'info' | 'warn' | 'error' | 'success', message: string) {
+function writeAutoReplyLog(
+  level: 'info' | 'warn' | 'error' | 'success' | 'debug',
+  message: string,
+) {
   window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, { level, scope: '自动回复', message })
 }
 
@@ -699,7 +702,8 @@ export function useAutoReply() {
         comment.nick_name === accountName
       ) {
         // 以前这里是静默 return：主播自己发的弹幕没回复时，日志里完全查不到原因
-        writeAutoReplyLog('info', `弹幕来自主播本人 [${comment.nick_name}]，跳过不予回复。`)
+        // 降到 debug：运行日志面板不再刷屏，但 main.log 仍保留，便于事后排查
+        writeAutoReplyLog('debug', `弹幕来自主播本人 [${comment.nick_name}]，跳过不予回复。`)
         return
       }
 
@@ -708,7 +712,7 @@ export function useAutoReply() {
         accountConfig.blockList?.includes(comment.nick_name)
       ) {
         window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, {
-          level: 'info',
+          level: 'debug',
           scope: '自动回复',
           message: `观众 [${comment.nick_name}] 处于黑名单中，跳过不予回复。`,
         })
@@ -734,7 +738,7 @@ export function useAutoReply() {
                 ? '正则'
                 : '模糊'
         window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, {
-          level: 'info',
+          level: 'debug',
           scope: '自动回复',
           message: `观众 [${comment.nick_name}] 的弹幕 "${commentContent}" 匹配了过滤关键词 [${matchedText}]（${matchTypeStr}匹配），已被过滤不予回复。`,
         })
@@ -776,7 +780,7 @@ export function useAutoReply() {
               )
               if (!shouldReply) {
                 window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, {
-                  level: 'info',
+                  level: 'debug',
                   scope: 'AI智能过滤',
                   message: `观众 [${comment.nick_name}] 的弹幕 "${commentContent}" 经 AI 智能过滤判定为无需回复，已被过滤。`,
                 })
@@ -806,7 +810,7 @@ export function useAutoReply() {
             } else {
               // 以前这里是静默不回复：关键字没命中 + AI 回复关闭 = 什么都不做、也不写日志
               writeAutoReplyLog(
-                'info',
+                'debug',
                 `观众 [${comment.nick_name}] 的弹幕 "${commentContent}" 未命中关键字回复，且 AI 回复未开启，跳过不予回复。`,
               )
             }

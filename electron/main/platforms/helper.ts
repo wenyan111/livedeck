@@ -1,5 +1,5 @@
 import { Result } from '@praha/byethrow'
-import type { ElementHandle, Page } from 'playwright'
+import type { ElementHandle, Frame, Page } from 'playwright'
 import { UnexpectedError } from '#/errors/AppError'
 import {
   ElementContentMismatchedError,
@@ -334,6 +334,75 @@ export async function getItemFromVirtualScroller(
 }
 
 const TOGGLE_BUTTON_MAX_TRY_COUNT = 5
+
+/**
+ * 「该商品已在讲解中」这类服务端拒绝的提示文案。
+ * 小红书实测：点击列表行上的「讲解」后服务端返回「操作失败，该商品已在讲解中（B5218）」，
+ * 而该行按钮文案仍然是「讲解」（前端不反映后端状态），于是会一直点到超限。
+ */
+const ALREADY_POPPING_NOTICE_TEXTS = ['已在讲解中']
+
+/**
+ * 在页面内执行：页面上是否存在包含指定文案的可见提示。
+ * 只认「最内层命中的元素」—— 父容器同样包含该文案，只看 textContent 会整页误判。
+ * 注意：本函数会被序列化到页面里执行，不能引用本模块作用域的任何变量。
+ */
+export function hasVisibleNoticeInPage(needles: string[]): boolean {
+  const hit = (el: Element) => {
+    const text = el.textContent ?? ''
+    return needles.some(needle => text.includes(needle))
+  }
+  const isVisible = (el: Element) => {
+    const rect = el.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0
+  }
+  const body = document.body
+  if (!body || !hit(body)) {
+    return false
+  }
+  for (const el of Array.from(body.querySelectorAll('*'))) {
+    if (!hit(el)) continue
+    if (Array.from(el.children).some(hit)) continue
+    if (isVisible(el)) return true
+  }
+  return false
+}
+
+/** 检查讲解按钮所在页面（含子 frame）上是否出现了指定提示 */
+async function hasVisibleNotice(
+  button: ElementHandle<SVGElement | HTMLElement>,
+  needles: string[],
+): Promise<boolean> {
+  try {
+    const frame = await button.ownerFrame()
+    if (!frame) return false
+    const frames: Frame[] = [frame]
+    for (let i = 0; i < frames.length; i++) {
+      const current = frames[i]
+      try {
+        if (await current.evaluate(hasVisibleNoticeInPage, needles)) return true
+      } catch {
+        // 跨域 frame / 已销毁，跳过
+      }
+      frames.push(...current.childFrames())
+    }
+  } catch {
+    // 句柄已脱离 DOM 等情况，按「没有提示」处理，交给原有的重试逻辑
+  }
+  return false
+}
+
+/** 读取按钮文案；句柄脱离 DOM 时返回 null（交给上层重试） */
+async function readButtonText(
+  button: ElementHandle<SVGElement | HTMLElement>,
+): Promise<string | null> {
+  try {
+    return (await button.textContent())?.trim() ?? ''
+  } catch {
+    return null
+  }
+}
+
 export async function toggleButton(
   button: ElementHandle<SVGElement | HTMLElement>,
   sourceContent: string,
@@ -352,10 +421,8 @@ export async function toggleButton(
   // 列表在「读文字」与「读禁用态」之间可能重渲染，按钮句柄会脱离 DOM。
   // 这类瞬态异常不应让整个任务永久停掉 —— 转成可重试的 ElementNotFoundError，
   // 上层（runWithRetry）会用全新句柄重新取按钮，下一次通常就能成功。
-  let buttonText: string
-  try {
-    buttonText = (await button.textContent())?.trim() || ''
-  } catch {
+  const buttonText = await readButtonText(button)
+  if (buttonText === null) {
     return Result.fail(new ElementNotFoundError({ elementName: '讲解按钮' }))
   }
   if (buttonText !== sourceContent && buttonText !== targetContent) {
@@ -397,10 +464,22 @@ export async function toggleButton(
   }
   // button.click() 在抖店&百应的表现很诡异，所以用 dispatchEvent('click')
   await button.dispatchEvent('click')
-  return Result.pipe(
-    abortableSleep(1000, signal),
-    Result.andThen(() => toggleButton(button, sourceContent, targetContent, signal, tryCount + 1)),
-  )
+  const sleepResult = await abortableSleep(1000, signal)
+  if (Result.isFailure(sleepResult)) {
+    return sleepResult
+  }
+
+  // 点击后按钮文案没变化，有两种可能，必须分开处理：
+  // 1. 服务端认为该商品「已在讲解中」（小红书 B5218）—— 本任务的目标态就是「讲解中」，
+  //    目标已经达成，应判成功；否则会一直点到超限，把整个自动弹窗任务拖停。
+  // 2. 点击真的没生效 —— 继续重试。
+  // 用「页面上是否出现『已在讲解中』提示」区分这两种情况。
+  const afterText = await readButtonText(button)
+  if (afterText === buttonText && (await hasVisibleNotice(button, ALREADY_POPPING_NOTICE_TEXTS))) {
+    return Result.succeed()
+  }
+
+  return toggleButton(button, sourceContent, targetContent, signal, tryCount + 1)
 }
 
 /** 确保 page 非空 */

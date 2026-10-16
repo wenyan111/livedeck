@@ -416,5 +416,12 @@ export function useOpenPriceLinkageGlobal() {
     // 无论是否刚拉起，都按最新配置应用「停用自身检测」策略
     // （防止触发源监听在跑时，跟随平台自身检测重复发；该策略只停跟随端、不自动启动任何监听）
     void applySelfWatchPolicy()
-  }, [config.enabled, config.sourceAccountId, accountConnected, accountPlatforms, startWatcher, applySelfWatchPolicy])
+  }, [
+    config.enabled,
+    config.sourceAccountId,
+    accountConnected,
+    accountPlatforms,
+    startWatcher,
+    applySelfWatchPolicy,
+  ])
 }

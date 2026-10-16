@@ -2,10 +2,9 @@ import { useMemoizedFn } from 'ahooks'
 import { PlayIcon, SquareIcon, ZapIcon } from 'lucide-react'
 import React from 'react'
 import { openPricePlatforms, openPriceSelfDetectPlatforms, platformLabels } from '@/abilities'
+import FeaturePill from '@/components/common/FeaturePill'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { useAccounts } from '@/hooks/useAccounts'
@@ -19,82 +18,14 @@ import {
   QUICK_START_SUPPORTED_PLATFORMS,
   type QuickStartKey,
   readQuickStartAutoStart,
-  readQuickStartSelection,
   useQuickStart,
   useQuickStartStore,
 } from '@/hooks/useQuickStart'
-import { cn } from '@/lib/utils'
 
 /** 各功能限定的平台，不在列表里则不显示该选项（与一键开启/自动开启共用同一份定义） */
 const SUPPORTED_PLATFORMS = QUICK_START_SUPPORTED_PLATFORMS
 
 const ALL_KEYS: QuickStartKey[] = ['autoMessage', 'autoPopUp', 'autoReply', 'openPrice']
-
-/** 单个功能：勾选框 + 实时运行状态 */
-const FeatureCheckbox = React.memo(
-  ({
-    accountId,
-    platform,
-    featureKey,
-    running,
-    error,
-    note,
-  }: {
-    accountId: string
-    platform: LiveControlPlatform
-    featureKey: QuickStartKey
-    running: boolean
-    /** 开启失败原因，有值则显示红点 */
-    error?: string | null
-    /** 传了表示该平台不能在此启动，只展示说明，勾选框禁用 */
-    note?: string
-  }) => {
-    // 「账号 × 平台」双重隔离：同一平台不同账号各记一份，切平台/切账号互不代入
-    const checked = useQuickStartStore(s =>
-      Boolean(readQuickStartSelection(s.selection, accountId, platform)[featureKey]),
-    )
-    const toggle = useQuickStartStore(s => s.toggle)
-    const isConnected = useCurrentLiveControl(context => context.isConnected)
-    const disabled = Boolean(note)
-
-    return (
-      <div className="flex items-center justify-between rounded-md border px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id={`quick-start-${platform}-${featureKey}`}
-            checked={disabled ? false : checked}
-            disabled={disabled}
-            onCheckedChange={v => toggle(accountId, platform, featureKey, Boolean(v))}
-          />
-          <Label
-            htmlFor={`quick-start-${platform}-${featureKey}`}
-            className={cn('text-sm', disabled ? 'text-muted-foreground' : 'cursor-pointer')}
-          >
-            {QUICK_START_LABELS[featureKey]}
-          </Label>
-        </div>
-        {note ? (
-          <span className="text-xs text-muted-foreground">{note}</span>
-        ) : (
-          isConnected === 'connected' && (
-            <span
-              className="flex items-center gap-1.5 text-xs text-muted-foreground"
-              title={error ?? undefined}
-            >
-              <span
-                className={cn(
-                  'w-1.5 h-1.5 rounded-full',
-                  running ? 'bg-success' : error ? 'bg-destructive' : 'bg-muted-foreground/40',
-                )}
-              />
-              {running ? '运行中' : error ? '开启失败' : '未运行'}
-            </span>
-          )
-        )}
-      </div>
-    )
-  },
-)
 
 /** 「连接后自动开启」开关：按「账号 × 平台」各自记忆，切平台/账号互不代入 */
 const AutoStartSwitch = React.memo(
@@ -117,7 +48,7 @@ const QuickStartCard = React.memo(() => {
   const platform = useCurrentLiveControl(context => context.platform)
   const { currentAccountId, accounts } = useAccounts()
   const accountName = accounts.find(acc => acc.id === currentAccountId)?.name
-  const { selection, startAll, stopAll } = useQuickStart()
+  const { selection, toggle, startAll, stopAll } = useQuickStart()
   const [busy, setBusy] = React.useState(false)
 
   const isAutoMessageRunning = useCurrentAutoMessage(context => context.isRunning)
@@ -185,17 +116,53 @@ const QuickStartCard = React.memo(() => {
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          {/* 操作区置顶：一键开启/停止 + 连接后自动开启开关（原在卡片底部，按用户要求上移） */}
+          {/* 操作区置顶：状态提示（一键开启/停止按钮已移至下方胶囊行末尾，按用户要求） */}
+          <div className="text-xs text-muted-foreground">
+            {connected
+              ? anyRunning
+                ? `运行中 ${selectedKeys.filter(k => runningMap[k]).length}/${selectedKeys.length}`
+                : `已勾选 ${selectedKeys.length} 项`
+              : '请先连接直播控制台'}
+          </div>
+
           <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {connected
-                ? anyRunning
-                  ? `运行中 ${selectedKeys.filter(k => runningMap[k]).length}/${selectedKeys.length}`
-                  : `已勾选 ${selectedKeys.length} 项`
-                : '请先连接直播控制台'}
-            </span>
+            <div>
+              <div className="text-sm">连接后自动开启</div>
+              <div className="text-muted-foreground text-xs">
+                连接到中控台后稍候约 15 秒（等页面加载完成）自动开启下方勾选的功能（按账号 ×
+                平台各自记忆）
+              </div>
+            </div>
+            <AutoStartSwitch accountId={currentAccountId} platform={platform} />
+          </div>
+
+          <Separator />
+
+          {/* 功能勾选：与「中控台管理」账号行下方的功能勾选同款胶囊（共用 FeaturePill 组件）
+              已勾选=珊瑚色实心、未勾选=浅描边；运行中亮绿点、开启失败亮红点
+              一键开启/停止按钮放在胶囊行末尾（按用户要求） */}
+          <div className="flex flex-wrap items-center gap-2">
+            {displayKeys.map(key => {
+              const disabled = key === 'openPrice' && !isOpenPriceStartable
+              return (
+                <FeaturePill
+                  key={key}
+                  id={`quick-start-${platform}-${key}`}
+                  label={QUICK_START_LABELS[key]}
+                  size="lg"
+                  checked={disabled ? false : Boolean(selection[key])}
+                  disabled={disabled}
+                  disabledTitle={disabled ? '由跨平台联动触发，无需启动' : undefined}
+                  connected={connected}
+                  running={runningMap[key]}
+                  error={key === 'openPrice' ? openPriceError : undefined}
+                  onToggle={() => toggle(currentAccountId, platform, key, !selection[key])}
+                />
+              )
+            })}
             <Button
               size="sm"
+              className="ml-1"
               onClick={handleClick}
               disabled={!connected || !currentAccountId || selectedKeys.length === 0 || busy}
               variant={anyRunning ? 'destructive' : 'success'}
@@ -212,37 +179,6 @@ const QuickStartCard = React.memo(() => {
                 </>
               )}
             </Button>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm">连接后自动开启</div>
-              <div className="text-muted-foreground text-xs">
-                连接到中控台后稍候约 8 秒（等页面加载完成）自动开启下方勾选的功能（按账号 ×
-                平台各自记忆）
-              </div>
-            </div>
-            <AutoStartSwitch accountId={currentAccountId} platform={platform} />
-          </div>
-
-          <Separator />
-
-          <div className="grid gap-2 sm:grid-cols-2">
-            {displayKeys.map(key => (
-              <FeatureCheckbox
-                key={key}
-                accountId={currentAccountId}
-                platform={platform}
-                featureKey={key}
-                running={runningMap[key]}
-                error={key === 'openPrice' ? openPriceError : undefined}
-                note={
-                  key === 'openPrice' && !isOpenPriceStartable
-                    ? '由跨平台联动触发，无需启动'
-                    : undefined
-                }
-              />
-            ))}
           </div>
         </div>
       </CardContent>
