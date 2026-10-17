@@ -60,11 +60,17 @@ export default function FeaturePill({
             : 'border-border/40 text-muted-foreground hover:border-border hover:text-foreground',
       )}
     >
-      {/* 运行中亮绿点、开启失败亮红点（未连接一律不亮）：一眼看出该账号下哪些功能真跑起来了 */}
+      {/* 运行态三色点：运行中=绿、开启失败=红、已开启但未运行=灰；未连接一律不亮。
+          一眼看出该账号下哪些功能真跑起来了，哪些只是挂着没动。 */}
       {connected && running ? (
         <span className={`${dotCls} shrink-0 rounded-full bg-success`} title="运行中" />
       ) : connected && error ? (
-        <span className={`${dotCls} shrink-0 rounded-full bg-destructive`} title={error} />
+        <span
+          className={`${dotCls} shrink-0 rounded-full bg-destructive`}
+          title={error ?? '运行失败'}
+        />
+      ) : connected && checked ? (
+        <span className={`${dotCls} shrink-0 rounded-full bg-muted-foreground/50`} title="未运行" />
       ) : null}
       {label}
     </button>

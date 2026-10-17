@@ -49,6 +49,8 @@ interface AutoReplyContext {
   replies: ReplyPreview[]
   comments: Message[]
   hideHost: boolean
+  /** 最近一次「开启」失败的原因，null = 没有失败（用于功能胶囊的红色失败点） */
+  error: string | null
 }
 
 interface AutoReplyState {
@@ -56,6 +58,7 @@ interface AutoReplyState {
 }
 interface AutoReplyAction {
   setIsRunning: (accountId: string, isRunning: boolean) => void
+  setError: (accountId: string, error: string | null) => void
   setIsListening: (accountId: string, isListening: ListeningStatus) => void
   addComment: (accountId: string, comment: Message) => void
   addReply: (accountId: string, commentId: string, nickname: string, content: string) => void
@@ -69,6 +72,7 @@ const createDefaultContext = (): AutoReplyContext => ({
   replies: [],
   comments: [],
   hideHost: false,
+  error: null,
 })
 
 export const useAutoReplyStore = create<AutoReplyState & AutoReplyAction>()(
@@ -92,6 +96,15 @@ export const useAutoReplyStore = create<AutoReplyState & AutoReplyAction>()(
         set(state => {
           const context = ensureContext(state, accountId)
           context.isRunning = isRunning
+          // 成功开启即清掉失败红点，避免绿点红点同时出现
+          if (isRunning) context.error = null
+        }),
+      setError: (accountId, error) =>
+        set(state => {
+          const context = ensureContext(state, accountId)
+          context.error = error
+          // 失败时一定不是在跑，避免红点绿点同时出现
+          if (error) context.isRunning = false
         }),
       setIsListening: (accountId, isListening) =>
         set(state => {

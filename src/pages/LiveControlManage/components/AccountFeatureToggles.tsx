@@ -40,6 +40,17 @@ const AccountFeatureToggles = React.memo(
     const autoPopUpRunning = useAutoPopUpStore(s => Boolean(s.contexts[accountId]?.isRunning))
     const autoReplyRunning = useAutoReplyStore(s => Boolean(s.contexts[accountId]?.isRunning))
     const openPriceRunning = useOpenPriceScriptStore(s => Boolean(s.runtime[accountId]?.isRunning))
+    // 四个功能的「开启失败」错误：用于功能胶囊的红色失败点（失败即亮红，成功/停止即清掉）
+    const autoMessageError = useAutoMessageStore(s => s.contexts[accountId]?.error ?? null)
+    const autoPopUpError = useAutoPopUpStore(s => s.contexts[accountId]?.error ?? null)
+    const autoReplyError = useAutoReplyStore(s => s.contexts[accountId]?.error ?? null)
+    const openPriceError = useOpenPriceScriptStore(s => s.runtime[accountId]?.error ?? null)
+    const errorMap: Record<QuickStartKey, string | null> = {
+      autoMessage: autoMessageError,
+      autoPopUp: autoPopUpError,
+      autoReply: autoReplyError,
+      openPrice: openPriceError,
+    }
     const runningMap: Record<QuickStartKey, boolean> = {
       autoMessage: autoMessageRunning,
       autoPopUp: autoPopUpRunning,
@@ -67,6 +78,7 @@ const AccountFeatureToggles = React.memo(
               disabledTitle={disabled ? '由跨平台开价联动触发，无需在此启动' : undefined}
               connected={connected}
               running={runningMap[key]}
+              error={errorMap[key]}
               onToggle={() => toggle(accountId, platform, key, !checked)}
             />
           )

@@ -1,5 +1,7 @@
 import { useMemoizedFn } from 'ahooks'
+import { Reorder, useDragControls } from 'framer-motion'
 import {
+  GripVertical,
   Loader2,
   MonitorSmartphone,
   MoreHorizontal,
@@ -109,11 +111,200 @@ const StatusPill = React.memo(({ status }: { status: ConnStatus }) => {
   )
 })
 
+/**
+ * 账号行的栅格列模板（所有行共用同一套，保证列严格对齐）。
+ * 列序：拖拽手柄 / 勾选框 / 平台徽标 / 平台下拉 / 账号名(弹性) / 功能胶囊(弹性) / 右侧操作(自适应)。
+ * 后续要加功能，只需在这里加一列、并在 AccountRow 里补对应单元格即可，所有行自动对齐。
+ */
+const ROW_GRID =
+  'grid grid-cols-[18px_18px_28px_104px_minmax(140px,1.5fr)_minmax(160px,1fr)_auto] items-center gap-x-3'
+
+/** 单个账号行：拖拽手柄（仅「全部状态」下可拖）+ 勾选/平台/名称/功能胶囊/状态与操作。 */
+const AccountRow = React.memo(
+  ({
+    account,
+    reorderEnabled,
+    status,
+    connected,
+    connecting,
+    isDefault,
+    platform,
+    anyRunning,
+    canStart,
+    selected,
+    onToggle,
+    onConnectOne,
+    onDisconnectOne,
+    onRun,
+    onEdit,
+    onDelete,
+  }: {
+    account: Account
+    reorderEnabled: boolean
+    status: ConnStatus
+    connected: boolean
+    connecting: boolean
+    isDefault: boolean
+    platform: LiveControlPlatform
+    anyRunning: boolean
+    canStart: boolean
+    selected: boolean
+    onToggle: (id: string, checked: boolean) => void
+    onConnectOne: (account: Account) => void
+    onDisconnectOne: (account: Account) => void
+    onRun: (account: Account, mode: 'start' | 'stop') => void
+    onEdit: (id: string, name: string) => void
+    onDelete: (id: string, name: string) => void
+  }) => {
+    // 每个行实例各自的拖拽控制器：只有手柄 onPointerDown 能发起拖拽，
+    // 这样点击行内按钮/下拉不会误触发排序。
+    const controls = useDragControls()
+    const setPlatform = useLiveControlStore(s => s.setPlatform)
+    return (
+      <Reorder.Item
+        as="div"
+        value={account}
+        dragListener={false}
+        dragControls={controls}
+        className={cn(
+          ROW_GRID,
+          'rounded-lg border px-3 py-2.5 transition-colors hover:border-border hover:bg-accent/40',
+        )}
+      >
+        {/* 拖拽手柄：放在账号最前面；筛选状态下不可排序，渲染占位保持列对齐 */}
+        {reorderEnabled ? (
+          <button
+            type="button"
+            onPointerDown={(e: React.PointerEvent) => controls.start(e)}
+            title="拖拽排序"
+            className="flex h-6 w-[18px] shrink-0 cursor-grab items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing"
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        ) : (
+          <span className="w-[18px] shrink-0" aria-hidden />
+        )}
+        <Checkbox
+          id={`live-control-manage-${account.id}`}
+          checked={selected}
+          onCheckedChange={v => onToggle(account.id, Boolean(v))}
+        />
+        {/* 平台徽标：比整块下拉更省地方，一眼区分平台 */}
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-medium">
+          {platformLabels[platform]?.[0] ?? '?'}
+        </span>
+        <Select
+          value={platform}
+          onValueChange={value => setPlatform(account.id, value as LiveControlPlatform)}
+          disabled={status !== 'disconnected'}
+        >
+          <SelectTrigger className="h-7 w-[104px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PLATFORM_OPTIONS.map(([key, name]) => (
+              <SelectItem key={key} value={key}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <label
+          htmlFor={`live-control-manage-${account.id}`}
+          className="min-w-0 cursor-pointer truncate font-medium"
+          title={account.name}
+        >
+          {account.name}
+        </label>
+        {/* 该账号的功能开关（与首页「一键开启」卡片同源，实时同步） */}
+        <AccountFeatureToggles accountId={account.id} platform={platform} connected={connected} />
+        {/* 状态 + 连接/断开 + 更多 + 一键开启/停止：统一收进最右列，右对齐，跨行严格对齐 */}
+        <div className="flex items-center justify-end gap-2">
+          <StatusPill status={status} />
+          {connected ? (
+            <Button size="sm" variant="secondary" onClick={() => onDisconnectOne(account)}>
+              断开
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => onConnectOne(account)} disabled={connecting}>
+              {connecting ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  连接中
+                </>
+              ) : (
+                '连接'
+              )}
+            </Button>
+          )}
+          {/* 重命名 / 删除收进「更多」，避免误点红色的删除 */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground"
+                title="更多操作"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-32 p-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => onEdit(account.id, account.name)}
+              >
+                <Pencil className="mr-2 h-4 w-4" />
+                重命名
+              </Button>
+              {!isDefault && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start text-destructive"
+                  onClick={() => onDelete(account.id, account.name)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除
+                </Button>
+              )}
+            </PopoverContent>
+          </Popover>
+          {/* 一键开启 / 停止：只作用于此账号。
+              未连接时用灰色描边——绿色代表「可开启」，没连接时不该给绿色误导。 */}
+          <Button
+            size="sm"
+            variant={anyRunning ? 'destructive' : connected ? 'success' : 'outline'}
+            disabled={!connected || (!anyRunning && !canStart)}
+            title={connected ? undefined : '请先连接中控台'}
+            onClick={() => onRun(account, anyRunning ? 'stop' : 'start')}
+          >
+            {anyRunning ? (
+              <>
+                <SquareIcon className="mr-1.5 h-4 w-4" />
+                一键停止
+              </>
+            ) : (
+              <>
+                <PlayIcon className="mr-1.5 h-4 w-4" />
+                一键开启
+              </>
+            )}
+          </Button>
+        </div>
+      </Reorder.Item>
+    )
+  },
+)
+
 export default function LiveControlManage() {
   const accounts = useAccounts(s => s.accounts)
   const addAccount = useAccounts(s => s.addAccount)
   const updateAccountName = useAccounts(s => s.updateAccountName)
   const removeAccount = useAccounts(s => s.removeAccount)
+  const reorderAccounts = useAccounts(s => s.reorderAccounts)
   const contexts = useLiveControlStore(s => s.contexts)
   const setPlatform = useLiveControlStore(s => s.setPlatform)
   const { connectAccount, disconnectAccount } = useConnectLiveControl()
@@ -191,6 +382,12 @@ export default function LiveControlManage() {
       }),
     [accounts, statusFilter, contexts],
   )
+
+  // 拖拽排序只对「全部状态」视图开启：筛选子集无法无歧义映射回完整顺序，故筛选态禁用手柄
+  const reorderEnabled = statusFilter === 'all'
+  const handleReorder = useMemoizedFn((newOrder: Account[]) => {
+    reorderAccounts(newOrder.map(a => a.id))
+  })
 
   const selectedAccounts = useMemo(() => accounts.filter(a => selected[a.id]), [accounts, selected])
   const connectableCount = selectedAccounts.filter(a => statusOf(a.id) === 'disconnected').length
@@ -417,7 +614,13 @@ export default function LiveControlManage() {
               当前筛选下没有账号
             </p>
           ) : (
-            <div className="space-y-2">
+            <Reorder.Group
+              as="div"
+              axis="y"
+              values={visibleAccounts}
+              onReorder={handleReorder}
+              className="space-y-2"
+            >
               {visibleAccounts.map(account => {
                 const status = statusOf(account.id)
                 const connected = status === 'connected'
@@ -431,133 +634,30 @@ export default function LiveControlManage() {
                 const runningKeys = keysOf(account.id).filter(k => isRunningOf(k, account.id))
                 const anyRunning = connected && runningKeys.length > 0
                 const canStart = keysOf(account.id).some(k => !isRunningOf(k, account.id))
+                const selectedForRow = Boolean(selected[account.id])
                 return (
-                  <div
+                  <AccountRow
                     key={account.id}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5 transition-colors hover:border-border hover:bg-accent/40"
-                  >
-                    <Checkbox
-                      id={`live-control-manage-${account.id}`}
-                      checked={Boolean(selected[account.id])}
-                      onCheckedChange={v => toggleAccount(account.id, Boolean(v))}
-                    />
-                    {/* 平台徽标：比整块下拉更省地方，一眼区分平台 */}
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-medium">
-                      {platformLabels[platform]?.[0] ?? '?'}
-                    </span>
-                    <Select
-                      value={platform}
-                      onValueChange={value => setPlatform(account.id, value as LiveControlPlatform)}
-                      disabled={status !== 'disconnected'}
-                    >
-                      <SelectTrigger className="h-7 w-[104px] text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PLATFORM_OPTIONS.map(([key, name]) => (
-                          <SelectItem key={key} value={key}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <label
-                      htmlFor={`live-control-manage-${account.id}`}
-                      className="min-w-0 flex-1 cursor-pointer truncate font-medium"
-                    >
-                      {account.name}
-                    </label>
-                    {/* 该账号的功能开关（与首页「一键开启」卡片同源，实时同步） */}
-                    <AccountFeatureToggles
-                      accountId={account.id}
-                      platform={platform}
-                      connected={connected}
-                    />
-                    <StatusPill status={status} />
-                    {connected ? (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => void handleDisconnectOne(account)}
-                      >
-                        断开
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        onClick={() => void handleConnectOne(account)}
-                        disabled={connecting}
-                      >
-                        {connecting ? (
-                          <>
-                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                            连接中
-                          </>
-                        ) : (
-                          '连接'
-                        )}
-                      </Button>
-                    )}
-                    {/* 重命名 / 删除收进「更多」，避免误点红色的删除 */}
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground"
-                          title="更多操作"
-                        >
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-32 p-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full justify-start"
-                          onClick={() => setEditing({ id: account.id, name: account.name })}
-                        >
-                          <Pencil className="mr-2 h-4 w-4" />
-                          重命名
-                        </Button>
-                        {!isDefault && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start text-destructive"
-                            onClick={() => setDeleting({ id: account.id, name: account.name })}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            删除
-                          </Button>
-                        )}
-                      </PopoverContent>
-                    </Popover>
-                    {/* 一键开启 / 停止：只作用于此账号。
-                        未连接时用灰色描边——绿色代表「可开启」，没连接时不该给绿色误导。 */}
-                    <Button
-                      size="sm"
-                      variant={anyRunning ? 'destructive' : connected ? 'success' : 'outline'}
-                      disabled={!connected || (!anyRunning && !canStart)}
-                      title={connected ? undefined : '请先连接中控台'}
-                      onClick={() => void runForAccount(account, anyRunning ? 'stop' : 'start')}
-                    >
-                      {anyRunning ? (
-                        <>
-                          <SquareIcon className="mr-1.5 h-4 w-4" />
-                          一键停止
-                        </>
-                      ) : (
-                        <>
-                          <PlayIcon className="mr-1.5 h-4 w-4" />
-                          一键开启
-                        </>
-                      )}
-                    </Button>
-                  </div>
+                    account={account}
+                    reorderEnabled={reorderEnabled}
+                    status={status}
+                    connected={connected}
+                    connecting={connecting}
+                    isDefault={isDefault}
+                    platform={platform}
+                    anyRunning={anyRunning}
+                    canStart={canStart}
+                    selected={selectedForRow}
+                    onToggle={toggleAccount}
+                    onConnectOne={handleConnectOne}
+                    onDisconnectOne={handleDisconnectOne}
+                    onRun={runForAccount}
+                    onEdit={(id, name) => setEditing({ id, name })}
+                    onDelete={(id, name) => setDeleting({ id, name })}
+                  />
                 )
               })}
-            </div>
+            </Reorder.Group>
           )}
 
           <p className="text-xs text-muted-foreground">

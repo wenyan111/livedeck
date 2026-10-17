@@ -39,6 +39,8 @@ interface AutoPopUpContext {
   config: AutoPopUpConfig
   shortcuts?: ShortcutMapping[]
   isGlobalShortcut?: boolean
+  /** 最近一次「开启」失败的原因，null = 没有失败（用于功能胶囊的红色失败点） */
+  error: string | null
 }
 
 const defaultContext = (): AutoPopUpContext => ({
@@ -51,11 +53,13 @@ const defaultContext = (): AutoPopUpContext => ({
     random: false,
   },
   shortcuts: [],
+  error: null,
 })
 
 interface AutoPopUpStore {
   contexts: Record<string, AutoPopUpContext>
   setIsRunning: (accountId: string, running: boolean) => void
+  setError: (accountId: string, error: string | null) => void
   setConfig: (accountId: string, config: Partial<AutoPopUpConfig>) => void
   setShortcuts: (accountId: string, shortcuts: ShortcutMapping[]) => void
   setGlobalShortcut: (accountId: string, globalShortcut: boolean) => void
@@ -83,6 +87,15 @@ export const useAutoPopUpStore = create<AutoPopUpStore>()(
           set(state => {
             const context = ensureContext(state, accountId)
             context.isRunning = running
+            // 成功开启即清掉失败红点，避免绿点红点同时出现
+            if (running) context.error = null
+          }),
+        setError: (accountId, error) =>
+          set(state => {
+            const context = ensureContext(state, accountId)
+            context.error = error
+            // 失败时一定不是在跑，避免红点绿点同时出现
+            if (error) context.isRunning = false
           }),
         setConfig: (accountId, config) =>
           set(state => {
@@ -155,7 +168,9 @@ export const useAutoPopUpStore = create<AutoPopUpStore>()(
           Object.entries(state.contexts).map(([accountId, context]) => [
             // [accountId, context { isRunning, config }]
             accountId,
-            Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'isRunning')),
+            Object.fromEntries(
+              Object.entries(context).filter(([key]) => key !== 'isRunning' && key !== 'error'),
+            ),
           ]),
         ),
       }),

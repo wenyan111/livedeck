@@ -297,16 +297,27 @@ export function useFeatureControls() {
         accountId,
         config,
       )
-      useAutoMessageStore.getState().setIsRunning(accountId, Boolean(ok))
+      const store = useAutoMessageStore.getState()
+      if (ok) {
+        store.setIsRunning(accountId, true)
+        store.setError(accountId, null)
+      } else {
+        store.setError(accountId, '启动失败')
+      }
       return { name, ok: Boolean(ok), reason: ok ? undefined : '启动失败' }
     } catch (error) {
+      useAutoMessageStore
+        .getState()
+        .setError(accountId, error instanceof Error ? error.message : '启动异常')
       return { name, ok: false, reason: error instanceof Error ? error.message : '启动异常' }
     }
   })
 
   const stopAutoMessage = useMemoizedFn(async (accountId: string) => {
     await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoMessage.stop, accountId)
-    useAutoMessageStore.getState().setIsRunning(accountId, false)
+    const store = useAutoMessageStore.getState()
+    store.setIsRunning(accountId, false)
+    store.setError(accountId, null)
   })
 
   const startAutoPopUp = useMemoizedFn(async (accountId: string): Promise<StartResult> => {
@@ -321,16 +332,27 @@ export function useFeatureControls() {
         accountId,
         config,
       )
-      useAutoPopUpStore.getState().setIsRunning(accountId, Boolean(ok))
+      const store = useAutoPopUpStore.getState()
+      if (ok) {
+        store.setIsRunning(accountId, true)
+        store.setError(accountId, null)
+      } else {
+        store.setError(accountId, '启动失败')
+      }
       return { name, ok: Boolean(ok), reason: ok ? undefined : '启动失败' }
     } catch (error) {
+      useAutoPopUpStore
+        .getState()
+        .setError(accountId, error instanceof Error ? error.message : '启动异常')
       return { name, ok: false, reason: error instanceof Error ? error.message : '启动异常' }
     }
   })
 
   const stopAutoPopUp = useMemoizedFn(async (accountId: string) => {
     await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoPopUp.stop, accountId)
-    useAutoPopUpStore.getState().setIsRunning(accountId, false)
+    const store = useAutoPopUpStore.getState()
+    store.setIsRunning(accountId, false)
+    store.setError(accountId, null)
   })
 
   // 自动回复 = 启动评论监听 + 打开回复开关，两步缺一不可
@@ -347,21 +369,29 @@ export function useFeatureControls() {
         },
       )
       if (!ok) {
-        useAutoReplyStore.getState().setIsListening(accountId, 'error')
+        const store = useAutoReplyStore.getState()
+        store.setIsListening(accountId, 'error')
+        store.setError(accountId, '评论监听启动失败')
         return { name, ok: false, reason: '评论监听启动失败' }
       }
-      useAutoReplyStore.getState().setIsListening(accountId, 'listening')
-      useAutoReplyStore.getState().setIsRunning(accountId, true)
+      const store = useAutoReplyStore.getState()
+      store.setIsListening(accountId, 'listening')
+      store.setIsRunning(accountId, true)
+      store.setError(accountId, null)
       return { name, ok: true }
     } catch (error) {
-      return { name, ok: false, reason: error instanceof Error ? error.message : '启动异常' }
+      const reason = error instanceof Error ? error.message : '启动异常'
+      useAutoReplyStore.getState().setError(accountId, reason)
+      return { name, ok: false, reason }
     }
   })
 
   const stopAutoReply = useMemoizedFn(async (accountId: string) => {
-    useAutoReplyStore.getState().setIsRunning(accountId, false)
+    const store = useAutoReplyStore.getState()
+    store.setIsRunning(accountId, false)
     await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener, accountId)
-    useAutoReplyStore.getState().setIsListening(accountId, 'stopped')
+    store.setIsListening(accountId, 'stopped')
+    store.setError(accountId, null)
   })
 
   const startOpenPrice = useMemoizedFn(async (accountId: string): Promise<StartResult> => {

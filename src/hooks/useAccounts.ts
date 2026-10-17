@@ -16,6 +16,8 @@ interface AccountsStore {
   switchAccount: (id: string) => void
   getCurrentAccount: () => Account | undefined
   updateAccountName: (id: string, name: string) => void
+  /** 拖拽排序：传入按新顺序排列的账号 id 列表，重排持久化（immer + persist 自动落盘） */
+  reorderAccounts: (orderedIds: string[]) => void
 }
 
 export const useAccounts = create<AccountsStore>()(
@@ -66,6 +68,23 @@ export const useAccounts = create<AccountsStore>()(
             account.name = name
             // eventEmitter.emit(EVENTS.ACCOUNT_UPDATED, id, name)
           }
+        })
+      },
+
+      reorderAccounts: (orderedIds: string[]) => {
+        set(state => {
+          const byId = new Map(state.accounts.map(a => [a.id, a]))
+          const next: Account[] = []
+          for (const id of orderedIds) {
+            const acc = byId.get(id)
+            if (acc) {
+              next.push(acc)
+              byId.delete(id)
+            }
+          }
+          // 兜底：把没出现在 orderedIds 里的账号（极端情况）追加到末尾，避免丢失
+          for (const acc of byId.values()) next.push(acc)
+          state.accounts = next
         })
       },
     })),
