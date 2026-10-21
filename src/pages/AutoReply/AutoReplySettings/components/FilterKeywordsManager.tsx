@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
+import { SyncFilterKeywordsDialog } from './SyncFilterKeywordsDialog'
 
 export function FilterKeywordsManager() {
   const { updateFilterKeywords, config } = useAutoReplyConfig()
@@ -52,12 +53,12 @@ export function FilterKeywordsManager() {
 
   const getBadgeClass = (type: 'exact' | 'fuzzy' | 'regex') => {
     switch (type) {
-    case 'exact':
-      return 'bg-warning/10 text-warning border-warning/30 hover:bg-warning/15'
-    case 'regex':
-      return 'bg-accent/60 text-accent-foreground border-border hover:bg-accent'
-    default:
-      return 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
+      case 'exact':
+        return 'bg-warning/10 text-warning border-warning/30 hover:bg-warning/15'
+      case 'regex':
+        return 'bg-accent/60 text-accent-foreground border-border hover:bg-accent'
+      default:
+        return 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
     }
   }
 
@@ -75,7 +76,11 @@ export function FilterKeywordsManager() {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-medium">弹幕过滤关键词</h3>
+        {/* 标题行右侧放「一键同步关键词」：把这批过滤词批量写到其他账号（关键词按账号隔离存储） */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">弹幕过滤关键词</h3>
+          <SyncFilterKeywordsDialog keywords={filterKeywords} />
+        </div>
         <p className="text-sm text-muted-foreground">
           如果观众发送的弹幕符合以下过滤规则，则跳过不回复。可点击标签切换匹配模式：
         </p>

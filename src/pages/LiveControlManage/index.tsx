@@ -113,11 +113,12 @@ const StatusPill = React.memo(({ status }: { status: ConnStatus }) => {
 
 /**
  * 账号行的栅格列模板（所有行共用同一套，保证列严格对齐）。
- * 列序：拖拽手柄 / 勾选框 / 平台徽标 / 平台下拉 / 账号名(弹性) / 功能胶囊(弹性) / 右侧操作(自适应)。
+ * 列序：拖拽手柄 / 勾选框 / 平台徽标 / 平台下拉 / 账号名(紧凑 56–120px，过长截断) /
+ * 功能胶囊(占剩余 minmax(0,1fr)，4 个胶囊强制同一行，放不下由组件自己降档变小) / 右侧操作(自适应)。
  * 后续要加功能，只需在这里加一列、并在 AccountRow 里补对应单元格即可，所有行自动对齐。
  */
 const ROW_GRID =
-  'grid grid-cols-[18px_18px_28px_104px_minmax(140px,1.5fr)_minmax(160px,1fr)_auto] items-center gap-x-3'
+  'grid grid-cols-[18px_18px_28px_104px_minmax(56px,120px)_minmax(0,1fr)_auto] items-center gap-x-3'
 
 /** 单个账号行：拖拽手柄（仅「全部状态」下可拖）+ 勾选/平台/名称/功能胶囊/状态与操作。 */
 const AccountRow = React.memo(

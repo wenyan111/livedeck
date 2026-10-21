@@ -12,6 +12,7 @@ import {
   readQuickStartSelection,
   useQuickStartStore,
 } from '@/hooks/useQuickStart'
+import { cn } from '@/lib/utils'
 
 /**
  * 账号行下方的紧凑功能勾选（自动发言 / 自动弹窗 / 自动回复 / 开价话术）。
@@ -63,8 +64,35 @@ const AccountFeatureToggles = React.memo(
       key === 'openPrice' ? openPricePlatforms.includes(platform) : true,
     )
 
+    // 窄屏自适应：按本单元格实测宽度降档，永远排成一行（不换行、不被挤出）。
+    // 阈值对应三档的自然宽度：标准≈338px、compact≈276px、tiny≈222px。
+    const wrapRef = React.useRef<HTMLDivElement>(null)
+    const [density, setDensity] = React.useState<'default' | 'compact' | 'tiny'>('default')
+    React.useEffect(() => {
+      const el = wrapRef.current
+      if (!el) return
+      const apply = (w: number) => {
+        if (w <= 0) return
+        const next: 'default' | 'compact' | 'tiny' =
+          w < 280 ? 'tiny' : w < 330 ? 'compact' : 'default'
+        setDensity(prev => (prev === next ? prev : next))
+      }
+      apply(el.getBoundingClientRect().width)
+      const ro = new ResizeObserver(entries => {
+        for (const entry of entries) apply(entry.contentRect.width)
+      })
+      ro.observe(el)
+      return () => ro.disconnect()
+    }, [])
+
     return (
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div
+        ref={wrapRef}
+        className={cn(
+          'flex min-w-0 flex-nowrap items-center',
+          density === 'tiny' ? 'gap-[3px]' : density === 'compact' ? 'gap-1' : 'gap-1.5',
+        )}
+      >
         {keys.map(key => {
           const disabled = key === 'openPrice' && !openPriceSelfDetectPlatforms.includes(platform)
           const checked = disabled ? false : Boolean(selection[key])
@@ -79,6 +107,7 @@ const AccountFeatureToggles = React.memo(
               connected={connected}
               running={runningMap[key]}
               error={errorMap[key]}
+              density={density}
               onToggle={() => toggle(accountId, platform, key, !checked)}
             />
           )
