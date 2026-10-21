@@ -1,6 +1,6 @@
 import { useMemoizedFn } from 'ahooks'
-import { Plus, Trash, X } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { Plus, Trash, Upload, X } from 'lucide-react'
+import { type ChangeEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,6 +12,46 @@ import { useToast } from '@/hooks/useToast'
 interface Rule {
   keywords: string[]
   contents: string[]
+}
+
+interface ParseResult {
+  rules: Rule[]
+  skipped: number
+}
+
+/**
+ * 解析 txt 文本为关键词回复规则。
+ * 每行一条规则，格式与「批量编辑」一致：关键词/关键词|回复内容|回复内容
+ * （多个关键词用 / 分隔，多条回复用 | 分隔）。空行忽略；不符合格式的行计入 skipped 跳过。
+ */
+function parseRulesFromText(text: string): ParseResult {
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+  const rules: Rule[] = []
+  let skipped = 0
+  for (const line of lines) {
+    const items = line.split('|')
+    if (items.length < 2) {
+      skipped++
+      continue
+    }
+    const keywords = items[0]
+      .split('/')
+      .map(s => s.trim())
+      .filter(s => s.length > 0)
+    const contents = items
+      .slice(1)
+      .map(s => s.trim())
+      .filter(s => s.length > 0)
+    if (keywords.length === 0 || contents.length === 0) {
+      skipped++
+      continue
+    }
+    rules.push({ keywords, contents })
+  }
+  return { rules, skipped }
 }
 
 export function KeywordReplySetting() {
@@ -33,6 +73,50 @@ export function KeywordReplySetting() {
   }
 
   const keywordReplyId = useId()
+  const { toast } = useToast()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleImportFile = useMemoizedFn((e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // 复位，保证同一文件可重复选择
+    e.target.value = ''
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const raw = String(reader.result ?? '')
+      // 去 UTF-8 BOM（Windows 记事本保存常见）
+      let text = raw
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+      const { rules: imported, skipped } = parseRulesFromText(text)
+      if (imported.length === 0) {
+        toast.error('文件中没有可导入的规则（每行格式：关键词|回复内容）')
+        return
+      }
+      // 关键词 + 回复内容完全一致视为重复（顺序无关）
+      const sep = String.fromCharCode(0)
+      const signature = (r: Rule) =>
+        `${[...r.keywords].sort().join(sep)}|${[...r.contents].sort().join(sep)}`
+      const seen = new Set(rules.map(signature))
+      const merged: Rule[] = [...rules]
+      let duplicate = 0
+      for (const r of imported) {
+        const sig = signature(r)
+        if (seen.has(sig)) {
+          duplicate++
+          continue
+        }
+        seen.add(sig)
+        merged.push(r)
+      }
+      updateKeywordRules(merged)
+      let msg = `成功导入 ${imported.length} 条规则`
+      if (duplicate > 0) msg += `，已存在重复 ${duplicate} 条`
+      if (skipped > 0) msg += `，跳过 ${skipped} 行格式不符`
+      toast.success(msg)
+    }
+    reader.onerror = () => toast.error('读取文件失败')
+    reader.readAsText(file, 'utf-8')
+  })
 
   return (
     <div className="space-y-4">
@@ -50,6 +134,22 @@ export function KeywordReplySetting() {
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-medium">关键词回复规则</h3>
             <div className="flex items-center gap-x-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,text/plain"
+                className="hidden"
+                onChange={handleImportFile}
+              />
+              <Button
+                variant={'outline'}
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1"
+                title="从 txt 导入规则（每行：关键词|回复内容，多关键词用 / 分隔，多回复用 | 分隔）"
+              >
+                <Upload className="h-4 w-4" /> 导入
+              </Button>
               <Button variant={'outline'} size="sm" onClick={() => setShowEditor(prev => !prev)}>
                 {showEditor ? '普通模式' : '批量编辑'}
               </Button>
