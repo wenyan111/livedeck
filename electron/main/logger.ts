@@ -1,8 +1,30 @@
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { app } from 'electron'
 import electronLog, { type FormatParams, type LogFunctions } from 'electron-log'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import windowManager from './windowManager'
+
+// 日志目录自愈：腾讯柠檬等清理工具会删除 ~/Library/Logs/<appName>，
+// 导致 electron-log 的 file transport 写盘失败（Can't write to ...）。
+// 启动时创建目录，并让 file transport 每次解析路径前也确保目录存在，
+// 这样即使被外部删除，下一次写日志也会自动重建目录、恢复落盘。
+function ensureLogsDir() {
+  try {
+    fs.mkdirSync(app.getPath('logs'), { recursive: true })
+  } catch {
+    // 极少数情况下 app 尚未就绪，后续 resolvePath 会再次尝试
+  }
+}
+ensureLogsDir()
+const fileTransport = electronLog.transports.file
+const defaultResolvePath = fileTransport.resolvePath
+fileTransport.resolvePath = variables => {
+  ensureLogsDir()
+  return defaultResolvePath
+    ? defaultResolvePath.call(fileTransport, variables)
+    : app.getPath('logs')
+}
 
 const appRoot = path.join(app.getAppPath(), path.sep)
 const cleanPathRegex = new RegExp(appRoot.replace(/\\/g, '\\\\').replace(/\//g, '[\\\\/]'), 'gi')
