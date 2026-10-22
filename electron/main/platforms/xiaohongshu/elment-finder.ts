@@ -23,9 +23,7 @@ async function readIndexFromHandle(
   try {
     const raw = await el.evaluate(node => {
       const isField = (target: Element) =>
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.tagName === 'SELECT'
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
       if (isField(node)) {
         const field = node as HTMLInputElement
         return String(field.value || field.placeholder || '').trim()
@@ -89,7 +87,7 @@ export const xiaohongshuElementFinder: IElementFinder = {
       if (await marked.evaluate(isDisabledInPage)) {
         return Result.fail(
           new ElementDisabledError({
-            elementName: '讲解',
+            elementName: '弹卡按钮',
             element: await marked.evaluate(el => el.outerHTML),
           }),
         )
@@ -97,19 +95,20 @@ export const xiaohongshuElementFinder: IElementFinder = {
       return Result.succeed(marked)
     }
 
-    // 2. 新版操作按钮区：按文案精确匹配「讲解 / 结束讲解」
-    //    （「讲解」与「结束讲解」的 class 完全相同，只能靠文案区分）
+    // 2. 新版操作按钮区：按文案匹配「弹卡」（空闲）/「弹卡中 (Ns)」（倒计时中）
+    //    （「弹卡」与「讲解」并列、class 相同，只能靠文案区分）
     try {
       const actionRow = await item.$(SELECTORS.GOODS_ITEM_INNER.ACTION_ROW)
       if (actionRow) {
         const buttons = await actionRow.$$(SELECTORS.GOODS_ITEM_INNER.ACTION_BUTTON)
         for (const button of buttons) {
           const text = (await button.textContent())?.trim() ?? ''
-          if (text === TEXTS.POPUP_BUTTON || text === TEXTS.POPUP_BUTTON_CANCLE) {
+          // 空闲态「弹卡」，点击后「弹卡中 (Ns)」倒计时，两者都要能识别
+          if (text === TEXTS.POPUP_BUTTON || text.startsWith(TEXTS.POPUP_BUTTON_PENDING)) {
             if (await button.evaluate(isDisabledInPage)) {
               return Result.fail(
                 new ElementDisabledError({
-                  elementName: '讲解',
+                  elementName: '弹卡按钮',
                   element: await button.evaluate(el => el.outerHTML),
                 }),
               )
@@ -144,7 +143,7 @@ export const xiaohongshuElementFinder: IElementFinder = {
         ) {
           return Result.fail(
             new ElementDisabledError({
-              elementName: '讲解',
+              elementName: '弹卡按钮',
               element: await operation.evaluate(el => el.outerHTML),
             }),
           )
@@ -154,7 +153,7 @@ export const xiaohongshuElementFinder: IElementFinder = {
     }
     return Result.fail(
       new ElementNotFoundError({
-        elementName: '讲解按钮',
+        elementName: '弹卡按钮',
       }),
     )
   },
@@ -177,9 +176,7 @@ export const xiaohongshuElementFinder: IElementFinder = {
     for (const selector of SELECTORS.GOODS_ITEM_CANDIDATES) {
       for (const frame of page.frames()) {
         try {
-          const items = (await frame.$$(selector)) as ElementHandle<
-            SVGElement | HTMLElement
-          >[]
+          const items = (await frame.$$(selector)) as ElementHandle<SVGElement | HTMLElement>[]
           if (items.length === 0) {
             continue
           }
@@ -207,9 +204,7 @@ export const xiaohongshuElementFinder: IElementFinder = {
     const frame = await tagGoodsRows(page)
     if (frame) {
       try {
-        const items = (await frame.$$(`[${MARK.ROW}]`)) as ElementHandle<
-          SVGElement | HTMLElement
-        >[]
+        const items = (await frame.$$(`[${MARK.ROW}]`)) as ElementHandle<SVGElement | HTMLElement>[]
         if (items.length > 0) {
           return Result.succeed(items)
         }

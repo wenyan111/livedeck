@@ -109,6 +109,10 @@ const GoodsListCard = React.memo(() => {
   return (
     <Card>
       <CardContent className="pt-6">
+        <p className="text-xs text-warning mb-4">
+          备注：小红书「弹卡」点击后卡片约 15 秒自动收回；在 15
+          秒倒计时内（卡片未收回时）再次点击弹卡会失败，故弹窗间隔建议 ≥ 15 秒。
+        </p>
         <Tabs defaultValue="goods-list" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="goods-list">商品列表</TabsTrigger>

@@ -164,7 +164,7 @@ export interface IpcChannels {
     scope?: string
   }) => void
   /** 设置应用外观主题（同步系统标题栏明暗） */
-  [IPC_CHANNELS.app.setTheme]: (theme: 'light' | 'dark') => void
+  [IPC_CHANNELS.app.setTheme]: (theme: 'light' | 'dark' | 'system') => void
   /** 返回运行时真实版本号（asar 内 package.json） */
   [IPC_CHANNELS.app.getVersion]: () => string
 

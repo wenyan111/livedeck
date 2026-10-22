@@ -33,8 +33,9 @@ function setupIpcHandlers() {
     accountManager.setAccountName(account.id, account.name)
   })
 
-  // 同步系统窗口（macOS 标题栏）明暗，跟随应用内的深色背景设置
-  typedIpcMainHandle(IPC_CHANNELS.app.setTheme, (_, theme: 'light' | 'dark') => {
+  // 同步系统窗口（macOS 标题栏）明暗，跟随应用内的深色背景设置；
+  // 'system' 表示让原生窗口也跟随操作系统（含系统自身的自动/定时切换）
+  typedIpcMainHandle(IPC_CHANNELS.app.setTheme, (_, theme: 'light' | 'dark' | 'system') => {
     nativeTheme.themeSource = theme
   })
 

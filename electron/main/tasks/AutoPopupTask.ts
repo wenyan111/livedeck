@@ -100,7 +100,7 @@ export function createAutoPopupTask(
         }
         const result = await platform.performPopup(next.id, signal)
         if (Result.isSuccess(result)) {
-          logger.success(`商品 ${next.id} 讲解成功`)
+          logger.success(`商品 ${next.id} 弹窗成功`)
         }
         return result
       },
@@ -117,7 +117,7 @@ export function createAutoPopupTask(
     // 单轮失败不再中断整个任务：记一条警告、跳过本轮，下一个间隔到点继续试。
     // 否则一次「找不到/点不动」就会让自动弹窗永久停掉，需要人工重新开启。
     if (Result.isFailure(result) && isRecoverablePopupError(result.error)) {
-      logger.warn(`商品 ${next.id} 本轮讲解失败，已跳过本轮，稍后继续重试：`, result.error)
+      logger.warn(`商品 ${next.id} 本轮弹窗失败，已跳过本轮，稍后继续重试：`, result.error)
       return Result.succeed()
     }
     return result

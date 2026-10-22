@@ -483,6 +483,86 @@ export async function toggleButton(
   return toggleButton(button, sourceContent, targetContent, signal, tryCount + 1)
 }
 
+/**
+ * 一次性动作按钮（非切换型）：点击后按钮文案从 idleText 变为以 successPrefix 开头的状态。
+ * 典型场景：小红书「弹卡」——空闲态「弹卡」，点击后变「弹卡中 (15s)」倒计时，
+ * 15 秒后自动收回卡片。与 toggleButton 的区别：倒计时文案每次都不同（弹卡中 (15s)/(14s)…），
+ * 无法按精确文案判断，故用前缀判断；且只点一次、不做「取消」切换。
+ */
+export async function clickOnceButton(
+  button: ElementHandle<SVGElement | HTMLElement>,
+  idleText: string,
+  successPrefix: string,
+  signal?: AbortSignal,
+): Result.ResultAsync<void, Error> {
+  const buttonText = await readButtonText(button)
+  if (buttonText === null) {
+    return Result.fail(new ElementNotFoundError({ elementName: '弹卡按钮' }))
+  }
+  // 已经是「弹卡中 (Ns)」：卡片正在展示，目标态已达成，无需重复点击
+  if (buttonText.startsWith(successPrefix)) {
+    return Result.succeed()
+  }
+  if (buttonText !== idleText) {
+    return Result.fail(
+      new ElementContentMismatchedError({
+        current: buttonText,
+        target: `${idleText} 或 ${successPrefix}*`,
+      }),
+    )
+  }
+  let disabled = false
+  try {
+    disabled = await button.isDisabled()
+  } catch (e) {
+    // 句柄脱离 DOM 属瞬态，交给上层重试
+    if (
+      /not attached to the (DOM|node)|stale|execution context|detached/i.test(
+        String((e as Error)?.message ?? e),
+      )
+    ) {
+      return Result.fail(new ElementNotFoundError({ elementName: '弹卡按钮' }))
+    }
+    throw e
+  }
+  if (disabled) {
+    return Result.fail(
+      new ElementDisabledError({
+        elementName: '弹卡按钮',
+        element: await button.evaluate(el => el.outerHTML).catch(() => ''),
+      }),
+    )
+  }
+  // 小红书「弹卡」是 div（非 button）。dispatchEvent('click') 生成的是非 trusted 事件，
+  // 不会触发它的点击处理（实测点击后文案仍停在「弹卡」，报「元素内容不匹配」）。
+  // 改用真实鼠标点击（Playwright 经 CDP 派发 mousedown/mouseup/click，事件为 trusted），
+  // 可覆盖只认真实指针事件的组件；真实点击失败（被遮挡/不稳定）时再退回 dispatchEvent 兜底。
+  try {
+    await button.click({ timeout: 3000 })
+  } catch {
+    await button.dispatchEvent('click').catch(() => {})
+  }
+  // 点击后「弹卡中 (15s)」文案可能有网络/渲染延迟，轮询最多约 4 秒确认（8 × 500ms）
+  for (let i = 0; i < 8; i++) {
+    const sleepResult = await abortableSleep(500, signal)
+    if (Result.isFailure(sleepResult)) {
+      return sleepResult
+    }
+    const afterText = await readButtonText(button)
+    // 点完列表重渲染导致句柄失效时无法判定，但点击已派发，按成功处理避免重复弹卡
+    if (afterText === null || afterText.startsWith(successPrefix)) {
+      return Result.succeed()
+    }
+  }
+  const finalText = await readButtonText(button)
+  return Result.fail(
+    new ElementContentMismatchedError({
+      current: finalText ?? '(句柄已失效)',
+      target: `${successPrefix}*`,
+    }),
+  )
+}
+
 /** 确保 page 非空 */
 export function ensurePage(page: Page | null | undefined): Result.Result<Page, PlatformError> {
   if (!page) {

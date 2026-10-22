@@ -98,6 +98,8 @@ export const SELECTORS = {
 } as const
 
 export const TEXTS = {
-  POPUP_BUTTON: '讲解',
-  POPUP_BUTTON_CANCLE: '结束讲解',
+  // 小红书「弹卡」：空闲态文案「弹卡」，点击后变为「弹卡中 (Ns)」倒计时，
+  // 15 秒后自动收回卡片。故以「弹卡」为点击目标、「弹卡中」为成功态前缀。
+  POPUP_BUTTON: '弹卡',
+  POPUP_BUTTON_PENDING: '弹卡中',
 } as const

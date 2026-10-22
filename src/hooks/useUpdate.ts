@@ -100,7 +100,9 @@ export const useUpdateConfigStore = create<UpdateConfigStore>()(
   persist(
     set => ({
       enableAutoCheckUpdate: true,
-      source: 'github',
+      // 默认走 GitHub 代理（gh-proxy.com），国内用户无需开 VPN 即可下载更新；
+      // 用户仍可在更新弹窗的「更新源」里切回 GitHub 或填自定义镜像
+      source: 'https://gh-proxy.com',
       customSource: '',
       setEnableAutoCheckUpdate: enabled => set({ enableAutoCheckUpdate: enabled }),
       setSource: source => set({ source }),
@@ -108,7 +110,17 @@ export const useUpdateConfigStore = create<UpdateConfigStore>()(
     }),
     {
       name: 'update-storage',
+      version: 1,
       storage: createJSONStorage(() => localStorage),
+      migrate: (persisted: unknown, version: number) => {
+        // 旧版本默认 source 为 'github'（国内需 VPN 才能下载），统一升级为代理；
+        // 已手动设为自定义源的用户保持不变
+        const state = persisted as { source?: string } & Record<string, unknown>
+        if (version < 1 && state.source === 'github') {
+          state.source = 'https://gh-proxy.com'
+        }
+        return state
+      },
     },
   ),
 )

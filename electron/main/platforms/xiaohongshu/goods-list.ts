@@ -47,11 +47,12 @@ export interface GoodsMark {
 }
 
 /**
- * 在页面内执行：给商品行、序号输入框、讲解按钮打上临时标记。
+ * 在页面内执行：给商品行、序号输入框、弹卡按钮打上临时标记。
  * 返回本次标记到的行数与滚动容器是否命中。
  */
 export function tagGoodsRowsInPage(mark: GoodsMark): { rows: number; container: boolean } {
-  const POPUP_TEXTS = ['讲解', '结束讲解']
+  /** 「弹卡」文案：空闲态「弹卡」，点击后变「弹卡中 (Ns)」倒计时 */
+  const isPopupText = (text: string) => text === '弹卡' || text.startsWith('弹卡中')
   /** 商品行候选（新版在前，旧版表格兜底） */
   const ROW_SELECTORS = [
     '.goods-list .goods-card',
@@ -95,7 +96,7 @@ export function tagGoodsRowsInPage(mark: GoodsMark): { rows: number; container: 
     }
   }
 
-  // 1. 行解析工具：商品序号 + 讲解按钮
+  // 1. 行解析工具：商品序号 + 弹卡按钮
   //    语义兜底也要靠它判断「上溯到哪一层才是真正的商品行」，所以先定义。
   const resolveIndex = (row: Element): Element | null => {
     for (const selector of INDEX_SELECTORS) {
@@ -129,8 +130,8 @@ export function tagGoodsRowsInPage(mark: GoodsMark): { rows: number; container: 
 
   const resolvePopup = (row: Element): Element | null => {
     for (const el of leavesOf(row)) {
-      if (!POPUP_TEXTS.includes(readText(el))) continue
-      // 「讲解」文本可能被 span 包一层，向上取到真正可点击的按钮 / 操作项
+      if (!isPopupText(readText(el))) continue
+      // 「弹卡」文本可能被 span 包一层，向上取到真正可点击的按钮 / 操作项
       let clickable: Element = el
       let cur: Element | null = el
       while (cur && cur !== row) {
@@ -159,20 +160,20 @@ export function tagGoodsRowsInPage(mark: GoodsMark): { rows: number; container: 
     }
   }
 
-  // 3. 语义兜底：以「讲解 / 结束讲解」为锚点，向上回溯到最小的、既含该按钮又含商品序号的容器
+  // 3. 语义兜底：以「弹卡 / 弹卡中」为锚点，向上回溯到最小的、既含该按钮又含商品序号的容器
   if (candidates.length === 0) {
-    const anchors = leavesOf(document).filter(el => POPUP_TEXTS.includes(readText(el)))
+    const anchors = leavesOf(document).filter(el => isPopupText(readText(el)))
     if (anchors.length === 0) {
       return { rows: 0, container: false }
     }
     const countPopupIn = (node: Element) =>
-      leavesOf(node).filter(el => POPUP_TEXTS.includes(readText(el))).length
+      leavesOf(node).filter(el => isPopupText(readText(el))).length
     const seen = new Set<Element>()
     for (const anchor of anchors) {
       let cur: Element | null = anchor
       while (cur && cur !== document.body && cur !== document.documentElement) {
         const rect = cur.getBoundingClientRect()
-        // 真正的商品行需同时满足：宽度够、行内只有一个讲解按钮、且能读到商品序号。
+        // 真正的商品行需同时满足：宽度够、行内只有一个弹卡按钮、且能读到商品序号。
         // 若只看前两条，会停在 `.goods-card__action-row`（按钮行）这一层，
         // 那里没有序号，结果整行被判定为“不可用序号定位”而漏掉。
         if (rect.width >= 240 && countPopupIn(cur) === 1 && resolveIndex(cur) !== null) {
@@ -253,7 +254,7 @@ export function isDisabledInPage(el: Element): boolean {
 
 /** 在页面内执行：收集诊断信息，用于官方再次改版时快速定位 */
 export function describeGoodsPageInPage(): string {
-  const POPUP_TEXTS = ['讲解', '结束讲解']
+  const isPopupText = (text: string) => text === '弹卡' || text.startsWith('弹卡中')
   const leavesOf = (node: ParentNode) =>
     Array.from(node.querySelectorAll('*')).filter(el => el.children.length === 0)
   const classOf = (el: Element) => (typeof el.className === 'string' ? el.className : '')
@@ -266,7 +267,7 @@ export function describeGoodsPageInPage(): string {
     }
     return (el.textContent ?? '').trim()
   }
-  const isPopupLeaf = (el: Element) => POPUP_TEXTS.includes((el.textContent ?? '').trim())
+  const isPopupLeaf = (el: Element) => isPopupText((el.textContent ?? '').trim())
 
   const lines: string[] = []
   const rect = (el: Element) => {
@@ -303,7 +304,7 @@ export function describeGoodsPageInPage(): string {
   )
 
   const anchors = leavesOf(document).filter(isPopupLeaf)
-  lines.push(`popupAnchors(${POPUP_TEXTS.join('/')})=${anchors.length}`)
+  lines.push(`popupAnchors(弹卡/弹卡中*)=${anchors.length}`)
   lines.push('')
 
   anchors.slice(0, 4).forEach((anchor, i) => {
@@ -371,11 +372,7 @@ export async function dumpGoodsDiagnostics(page: Page): Promise<string | null> {
   try {
     const dir = path.join(app.getPath('logs'), 'goods-diagnostic')
     await fs.mkdir(dir, { recursive: true })
-    const stamp = new Date()
-      .toISOString()
-      .replace('T', '_')
-      .replace(/[:.]/g, '-')
-      .slice(0, 19)
+    const stamp = new Date().toISOString().replace('T', '_').replace(/[:.]/g, '-').slice(0, 19)
     const filePath = path.join(dir, `${stamp}-商品列表诊断.txt`)
 
     const parts: string[] = []

@@ -2,13 +2,13 @@ import { Result } from '@praha/byethrow'
 import type { Page } from 'playwright'
 import type { BrowserSession } from '#/managers/BrowserSessionManager'
 import {
+  clickOnceButton,
   comment,
   connect,
   ensurePage,
   getAccountName,
   getItemFromVirtualScroller,
   openUrlByElement,
-  toggleButton,
 } from '../helper'
 import type { ICommentListener, IPerformComment, IPerformPopup, IPlatform } from '../IPlatform'
 import { XiaohongshuCommentListener } from './commentListener'
@@ -79,7 +79,7 @@ export class XiaohongshuPlatform
       Result.andThen(page => getItemFromVirtualScroller(page, elementFinder, id)),
       Result.andThen(item => elementFinder.getPopUpButtonFromGoodsItem(item)),
       Result.andThen(btn =>
-        toggleButton(btn, TEXTS.POPUP_BUTTON, TEXTS.POPUP_BUTTON_CANCLE, signal),
+        clickOnceButton(btn, TEXTS.POPUP_BUTTON, TEXTS.POPUP_BUTTON_PENDING, signal),
       ),
     )
   }
