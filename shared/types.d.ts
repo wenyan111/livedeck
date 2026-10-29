@@ -61,10 +61,24 @@ declare type AutoCommentTask = {
   config: AutoCommentConfig
 }
 
+/**
+ * 自动回复「真 @」的目标评论。
+ *
+ * 带上它，百应（巨量百应）会走「点中控台里那条评论 → 平台插入 @昵称 token → 追加正文」，
+ * 发出的是平台可识别的结构化 mention（对方能收到通知），而不是纯文本的假 @。
+ */
+declare type ReplyTarget = {
+  msg_id: string
+  nick_name: string
+  content: string
+}
+
 declare type SendBatchMessagesConfig = {
   messages: string[]
   count: number
   noSpace?: boolean
+  /** 真 @ 目标；不传 = 走原有纯文本路径（默认，行为与改动前一致） */
+  replyTo?: ReplyTarget
 }
 
 declare type SendBatchMessagesTask = {

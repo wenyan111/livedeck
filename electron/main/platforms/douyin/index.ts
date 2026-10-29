@@ -113,10 +113,10 @@ export class DouyinPlatform
     )
   }
 
-  async performComment(message: string, pinTop: boolean) {
+  async performComment(message: string, pinTop?: boolean, replyTo?: ReplyTarget) {
     return Result.pipe(
       ensurePage(this.mainPage),
-      Result.andThen(page => comment(page, elementFinder, message, pinTop)),
+      Result.andThen(page => comment(page, elementFinder, message, pinTop, replyTo)),
     )
   }
 

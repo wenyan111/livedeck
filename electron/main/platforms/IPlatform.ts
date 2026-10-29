@@ -32,8 +32,15 @@ export function isPerformPopup(platform: IPlatform): platform is IPlatform & IPe
 
 export interface IPerformComment {
   _isPerformComment: true
-  /** 在互动评论区域发送评论，返回结果表示是否成功置顶 */
-  performComment(message: string, pinTop?: boolean): Result.ResultAsync<boolean, PlatformError>
+  /**
+   * 在互动评论区域发送评论，返回结果表示是否成功置顶。
+   * replyTo 非空时优先走「真 @」路径（点目标评论→插入 @token→追加正文），失败自动回退纯文本。
+   */
+  performComment(
+    message: string,
+    pinTop?: boolean,
+    replyTo?: ReplyTarget,
+  ): Result.ResultAsync<boolean, PlatformError>
   /** 获取评论任务所需的页面 */
   getCommentPage(): Page | null
 }

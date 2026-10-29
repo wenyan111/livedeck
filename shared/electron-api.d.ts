@@ -87,7 +87,11 @@ export interface IpcChannels {
     config: CommentListenerConfig,
   ) => boolean
   [IPC_CHANNELS.tasks.autoReply.stopCommentListener]: (accountId: string) => void
-  [IPC_CHANNELS.tasks.autoReply.sendReply]: (accountId: string, replyContent: string) => void
+  [IPC_CHANNELS.tasks.autoReply.sendReply]: (
+    accountId: string,
+    replyContent: string,
+    replyTo?: ReplyTarget,
+  ) => void
   [IPC_CHANNELS.tasks.autoReply.listenerStopped]: (accountId: string) => void
   [IPC_CHANNELS.tasks.autoReply.showComment]: (data: {
     comment: LiveMessage

@@ -75,6 +75,31 @@ export const SELECTORS = {
     SUBMIT_BUTTON_DISABLED: 'disabled',
   },
 
+  /**
+   * 互动评论列表（真 @ 专用）。
+   *
+   * 用户 2026-10-29 的 DevTools 截图（pgy.xiaohongshu.com）实测结构：
+   *   .comments.no-emoji > .comment-list > .comment-list-item[data-v-34c1368a]
+   * class 名**不带构建哈希**（哈希在 data-v-* 属性上），所以选择器可以写死，很稳。
+   * 悬停某条评论后，行内右侧浮出操作按钮，**第 1 个就是「回复」**（用户确认）。
+   */
+  COMMENT_LIST: {
+    ITEM_CANDIDATES: [
+      '.comment-list .comment-list-item',
+      '.comments .comment-list-item',
+      '.comment-list-item',
+    ],
+    /** 悬停后出现的操作按钮容器候选（命中就优先在其中找图标） */
+    ACTION_CANDIDATES: [
+      '[class*="comment-action"]',
+      '[class*="commentAction"]',
+      '[class*="action-bar"]',
+      '[class*="actionBar"]',
+      '[class*="operate"]',
+      '[class*="operation"]',
+    ],
+  },
+
   GOODS_ITEM_INNER: {
     OPERATION_PANNEL: '.more-operation',
     OPERATION_ITEM: '.operation-item',

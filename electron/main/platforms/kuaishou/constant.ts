@@ -28,6 +28,35 @@ export const SELECTORS = {
   },
   CLOSE_VIDEO_BTN: '[class^=live-panel] [class^=btn] > div:first-child',
   VIDEO: '[class^=video-container]',
+  commentList: {
+    /**
+     * 互动评论列表条目（快速路径，命中即用；找不到会退化到「按文本定位」）。
+     *
+     * ⚠️ 别再放宽它（2026-10-29 教训）：曾试图逐级放宽到 `div[class*=commentItem]`
+     * 乃至任意 `[class*=commentItem]`，想覆盖「快手没有 #comment-list-wrapper 容器」
+     * 的情况。但快速路径是**不经验证直接采用**的，放宽后可能命中错误元素，反而
+     * 绕过下面那条已经验活的 hover 校验路径。实测快手根本不走这条快速路径
+     * （命中的是输入区引用块 `replied-content--UayMH`），真正在起作用的是
+     * element-finder 里的「按文本定位 + hover 验证」。要放宽必须**同时**给快速路径
+     * 加上 hover 验证，否则宁可不改。
+     */
+    ITEM: '#comment-list-wrapper div[class^="commentItem"]',
+    /**
+     * 悬浮工具条的候选选择器（hover 评论后才渲染）。
+     * 只用于诊断探测，不用于点击——猜错的选择器点了会点偏。
+     * 拿到真实 DOM 后把确认过的选择器补到这里即可收敛。
+     */
+    HOVER_TOOLBAR: [
+      'div[class*=operation]',
+      'div[class*=Operation]',
+      'div[class*=operate]',
+      'div[class*=Operate]',
+      'div[class*=action]',
+      'div[class*=Action]',
+      'div[class*=toolbar]',
+      'div[class*=Toolbar]',
+    ],
+  },
   commentInput: {
     TEXTAREA: 'div[class^=reply-content] input[type=text]',
     // 回复框下方的「置顶评论」复选框（勾选后再发送即为置顶）。

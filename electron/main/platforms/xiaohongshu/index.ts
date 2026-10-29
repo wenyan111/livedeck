@@ -84,10 +84,14 @@ export class XiaohongshuPlatform
     )
   }
 
-  async performComment(message: string) {
+  async performComment(message: string, _pinTop?: boolean, replyTo?: ReplyTarget) {
+    // replyTo：自动回复要「真 @ 观众」时传入的目标评论。
+    // 小红书目前还没实现 findCommentItem（评论区在 iframe `#redlive-pgy-app` 内，
+    // DOM 结构待确认），此时 helper 会直接返回 false → 走原来的纯文本路径，
+    // 行为与改动前完全一致。等 element-finder 补齐后再打开 MENTION_PLATFORMS。
     return Result.pipe(
       ensurePage(this.mainPage),
-      Result.andThen(page => comment(page, elementFinder, message, false)),
+      Result.andThen(page => comment(page, elementFinder, message, false, replyTo)),
     )
   }
 

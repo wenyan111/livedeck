@@ -13,6 +13,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
+import { useCurrentLiveControl } from '@/hooks/useLiveControl'
 import { AIFilterSetting } from './components/AIFilterSetting'
 import { AIReplySetting } from './components/AIReplySetting'
 import { BlocklistManager } from './components/BlocklistManager'
@@ -21,12 +22,21 @@ import { FilterKeywordsManager } from './components/FilterKeywordsManager'
 import { HideUsernameSetting } from './components/HideUsernameSetting'
 import { KeywordReplySetting } from './components/KeywordReplySetting'
 import { ListeningSourceSetting } from './components/ListeningSourceSetting'
+import { MentionReplySetting } from './components/MentionReplySetting'
 import { WebSocketSetting } from './components/WebSocketSetting'
 import { WechatChannelSetting } from './components/WechatChannelSetting'
 
 export default function AutoReplySettings() {
   const { config } = useAutoReplyConfig()
   const navigate = useNavigate()
+  // 「真 @」支持：巨量百应、视频号、快手、小红书 / 蒲公英，其他平台不渲染这个开关
+  const platform = useCurrentLiveControl(ctx => ctx.platform)
+  const showMentionSetting =
+    platform === 'buyin' ||
+    platform === 'wxchannel' ||
+    platform === 'kuaishou' ||
+    platform === 'xiaohongshu' ||
+    platform === 'pgy'
 
   const ExtraSetting = useMemo(() => {
     switch (config.entry) {
@@ -60,6 +70,12 @@ export default function AutoReplySettings() {
           <Separator />
           <HideUsernameSetting />
           <Separator />
+          {showMentionSetting && (
+            <>
+              <MentionReplySetting />
+              <Separator />
+            </>
+          )}
           <div className="space-y-4">
             <Tabs defaultValue="keyword">
               <div className="flex justify-between items-center mb-2">

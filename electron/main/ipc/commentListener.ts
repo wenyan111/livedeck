@@ -43,25 +43,32 @@ function setupIpcHandlers() {
     },
   )
 
-  typedIpcMainHandle(IPC_CHANNELS.tasks.autoReply.sendReply, async (_, accountId, message) => {
-    await Result.pipe(
-      accountManager.getSession(accountId),
-      Result.andThen(accountSession =>
-        accountSession.startTask({
-          type: 'send-batch-messages',
-          config: {
-            messages: [message],
-            count: 1,
-            noSpace: true,
-          },
+  typedIpcMainHandle(
+    IPC_CHANNELS.tasks.autoReply.sendReply,
+    async (_, accountId, message, replyTo) => {
+      await Result.pipe(
+        accountManager.getSession(accountId),
+        Result.andThen(accountSession =>
+          accountSession.startTask({
+            type: 'send-batch-messages',
+            config: {
+              messages: [message],
+              count: 1,
+              noSpace: true,
+              // 真 @ 目标；不传（undefined）时发送任务完全走原有纯文本路径
+              replyTo,
+            },
+          }),
+        ),
+        Result.inspectError(error => {
+          const logger = createLogger(`@${accountManager.getAccountName(accountId)}`).scope(
+            TASK_NAME,
+          )
+          logger.error('发送回复失败：', error)
         }),
-      ),
-      Result.inspectError(error => {
-        const logger = createLogger(`@${accountManager.getAccountName(accountId)}`).scope(TASK_NAME)
-        logger.error('发送回复失败：', error)
-      }),
-    )
-  })
+      )
+    },
+  )
 }
 
 export function setupAutoReplyIpcHandlers() {

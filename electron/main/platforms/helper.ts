@@ -1,5 +1,5 @@
 import { Result } from '@praha/byethrow'
-import type { ElementHandle, Frame, Page } from 'playwright'
+import type { ElementHandle, Frame, Locator, Page } from 'playwright'
 import { UnexpectedError } from '#/errors/AppError'
 import {
   ElementContentMismatchedError,
@@ -9,6 +9,7 @@ import {
   PageNotFoundError,
   type PlatformError,
 } from '#/errors/PlatformError'
+import electronLog from '#/logger'
 import { abortableSleep, sleep } from '#/utils'
 import type { IElementFinder } from './IElementFinder'
 
@@ -47,6 +48,7 @@ export async function comment(
   elementFinder: IElementFinder,
   message: string,
   pinTop?: boolean,
+  replyTo?: ReplyTarget,
 ): Result.ResultAsync<boolean, PlatformError> {
   async function clickPinTopButton(page: Page): Result.ResultAsync<boolean, PlatformError> {
     return Result.pipe(
@@ -190,9 +192,248 @@ export async function comment(
     return lastFailure
   }
 
+  /** 真 @ 失败原因的日志 scope（只在传了 replyTo 时才会产生日志） */
+  const mentionLog = replyTo ? electronLog.scope('真@回复') : null
+
+  /** 清空评论输入框（真 @ 失败后回退用，避免残留内容污染纯文本路径） */
+  async function clearTextarea() {
+    const taResult = await elementFinder.getCommentTextarea(page)
+    if (Result.isSuccess(taResult)) {
+      try {
+        await taResult.value.fill('')
+      } catch {
+        // 清不掉也不致命：fillComment 会用 fill 整体覆盖
+      }
+    }
+  }
+
+  /**
+   * 合成鼠标悬停事件，把评论的 hover 态触发出来。
+   *
+   * 为什么不直接用 Playwright 的 `hover()`：它带 actionability 检查（可见/稳定/可接收事件），
+   * 直播中评论列表不断重渲染，元素经常被判为 unstable 而超时。合成事件不带任何检查。
+   *
+   * ⚠️ 实测排名（2026-10-25，按 main.log 逐分钟统计，别凭片段下结论）：
+   *   合成 hover + 轮询等操作栏 → 22 成功 / 0 失败（100%，用户认可的「无黄色警告」版）
+   *   Playwright hover()        → 13 成功 / 50 失败（21%）
+   *   page.mouse.move 真实鼠标  → 5 成功 / 50 失败（9%，且会让操作栏根本不渲染）
+   * 所以主路径就是本函数，别再改回 hover() 或真实鼠标。
+   */
+  async function syntheticHover(item: ElementHandle<SVGElement | HTMLElement>) {
+    for (const type of ['mouseover', 'mouseenter', 'mousemove']) {
+      try {
+        await item.dispatchEvent(type)
+      } catch {
+        // 单个事件失败不中断
+      }
+    }
+  }
+
+  /** item 可能是 ElementHandle（百应用 page.$$）或 Locator（视频号用 iframe.locator） */
+  function isElementHandle(
+    item: ElementHandle<SVGElement | HTMLElement> | Locator,
+  ): item is ElementHandle<SVGElement | HTMLElement> {
+    return typeof (item as ElementHandle<SVGElement | HTMLElement>).$ === 'function'
+  }
+
+  /**
+   * 默认的「点评论 → 触发回复」实现 = 百应那套（实测 100% 成功率）。
+   *
+   * 其他平台（如视频号）的评论列表 DOM 和悬浮工具栏结构完全不同，
+   * 应在自己的 elementFinder 上实现 `clickMentionEntry` 覆盖本函数；
+   * 没实现时就退化成「直接点评论本体」。
+   */
+  async function defaultClickMentionEntry(
+    item: ElementHandle<SVGElement | HTMLElement>,
+  ): Promise<boolean> {
+    // 合成 hover 让操作栏渲染出来
+    await syntheticHover(item)
+
+    // hover 态到 DOM 出现有延迟，轮询等操作栏渲染出来
+    let icon: ElementHandle<SVGElement | HTMLElement> | null = null
+    const deadline = Date.now() + 1000
+    while (Date.now() < deadline) {
+      icon = await item.$('div[class^="operationWrapper"] div[class^="iconWrapper"]')
+      if (icon) break
+      await sleep(60)
+    }
+
+    // 点操作栏第一个图标（= 「回复」），这才是真正插入 @token 的入口
+    if (icon) {
+      try {
+        await icon.dispatchEvent('click')
+        return true
+      } catch {
+        // 换路径重试
+      }
+    }
+    // 兜底：点评论本体（实测多数情况只激活不插 token，但偶发有效）
+    try {
+      await item.dispatchEvent('click')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 真 @ 失败时把评论节点的 DOM 快照写进日志。
+   *
+   * 用途：中控台是 offscreen BrowserWindow，不开 CDP 端口，拿不到真实 DOM；
+   * 而「鼠标悬停评论出现的 回复/编辑 按钮」到底挂在哪个 class 下、是不是必须
+   * hover 才渲染，直接决定能不能用它做降级前的最后一搏。这里限流输出（30s 一次），
+   * 下次真 @ 失败时就能从 main.log 里看到真实结构，再决定要不要加这一路。
+   */
+  let lastDomDumpAt = 0
+  async function dumpCommentItemDom(
+    item: ElementHandle<SVGElement | HTMLElement> | Locator,
+    reason: string,
+  ) {
+    if (!mentionLog) return
+    if (Date.now() - lastDomDumpAt < 30_000) return
+    lastDomDumpAt = Date.now()
+    try {
+      // 只有 ElementHandle 需要合成 hover（百应）；Locator（视频号）在 clickMentionEntry
+      // 里已经点过评论唤出过工具条，直接抓即可。
+      if (isElementHandle(item)) {
+        await syntheticHover(item)
+        await sleep(200)
+      }
+      // evaluate 在 ElementHandle / Locator 上的泛型签名不同，转成同一类型再调
+      const asHandle = item as ElementHandle<SVGElement | HTMLElement>
+      const html = await asHandle.evaluate(el => el.outerHTML).catch(() => '')
+      // 单独再抓一次操作栏：item 的 outerHTML 有 900 字上限，容易被前面的昵称/内容挤掉，
+      // 而操作栏里到底有几个图标、第一个是不是「回复」才是关键信息。
+      // 两种平台的工具条 class 完全不同，都抓：
+      //   百应  ：div[class^="operationWrapper"]
+      //   视频号：.action-popover（用户 2026-10-28 截图里的 上墙/回复/禁言/拉黑）
+      const opHtml = await asHandle
+        .evaluate(el => {
+          const op =
+            el.querySelector('div[class^="operationWrapper"]') ??
+            el.querySelector('.action-popover')
+          return op ? op.outerHTML : '(无 operationWrapper / action-popover)'
+        })
+        .catch(() => '(读取失败)')
+      mentionLog.warn(
+        `[DOM快照] ${reason}：item=${String(html).slice(0, 420)} || 操作栏=${String(opHtml).slice(0, 520)}`,
+      )
+    } catch {
+      // 快照失败不影响主流程
+    }
+  }
+
+  /**
+   * 真 @（mention）：点击评论列表里目标那条评论 → 平台自动往输入框插入 `@昵称` token →
+   * 光标移到末尾，用 `keyboard.insertText` 追加正文。
+   *
+   * 为什么不能用 `fill`：`fill` 会整体覆盖输入框内容，把平台刚生成的 mention 一起抹掉，
+   * 发出去就只是纯文本，平台不认为是对该观众的回复。
+   *
+   * ⚠️ 不检测、不据此回退（2026-10-28 按用户要求简化）：
+   * 点了「回复」之后 mention 由平台负责插入，这里直接追加正文。理由是——
+   *  - 视频号的 mention 是渲染在 textarea **之外**的 chip，检测天生读不到
+   *    （用户截图证实：输入框显示「回复 昵称」，但 textarea 的 value 是空的）；
+   *  - 即使哪次真的没插上，最坏结果就是纯文本回复，与原来的「降级」路径完全等价，
+   *    **没有任何额外风险**，反倒省掉了每次 2.5s 的轮询等待。
+   * 只保留一次短等待，让平台先把 mention 插完，避免正文抢在它前面。
+   */
+  async function tryMentionReply(): Promise<boolean> {
+    if (!replyTo || !elementFinder.findCommentItem) return false
+    const brief = replyTo.content.length > 20 ? `${replyTo.content.slice(0, 20)}…` : replyTo.content
+    // 分阶段计时：慢在哪一段一目了然，别再靠猜（2026-10-29）
+    const t0 = Date.now()
+    try {
+      // 先清空，避免上一次残留内容和 mention 叠在一起
+      await clearTextarea()
+      const tClear = Date.now()
+
+      const item = await elementFinder.findCommentItem(page, replyTo.content)
+      const tFind = Date.now()
+      if (!item) {
+        // 最常见原因：弹幕刷得快，这条评论已经被顶出可见列表（列表只渲染最近几条）
+        mentionLog?.warn(`未在评论列表找到目标评论，降级纯文本：「${brief}」`)
+        return false
+      }
+
+      // 触发平台的「回复」动作：平台自己实现了 clickMentionEntry 就用它的
+      // （如视频号），否则用百应那套默认实现（只支持 ElementHandle）。
+      const clickEntry = elementFinder.clickMentionEntry?.bind(elementFinder)
+      if (clickEntry) {
+        await clickEntry(page, item)
+      } else if (isElementHandle(item)) {
+        await defaultClickMentionEntry(item)
+      } else {
+        await item.dispatchEvent('click')
+      }
+      const tClick = Date.now()
+
+      const taResult = await elementFinder.getCommentTextarea(page)
+      if (Result.isFailure(taResult)) {
+        mentionLog?.warn(`点击后读不到输入框，降级纯文本：「${brief}」`)
+        return false
+      }
+      const textarea = taResult.value
+
+      // 等平台把 mention 插进输入框。
+      // 原来是**固定 sleep(500)**——每次白等半秒。改成轮询输入区文本：
+      // 一旦读到 @ / 昵称就立刻往下走，最多仍等 500ms（不改变失败行为，
+      // 只是把「等满」变成「出现即走」，实测平均省 300ms 左右）。
+      // 没实现 getMentionProbeText 的平台（百应/抖音）行为完全不变。
+      const waitDeadline = Date.now() + 500
+      while (Date.now() < waitDeadline) {
+        const probe = await elementFinder.getMentionProbeText?.(page)
+        const hit =
+          !!probe &&
+          (probe.includes('@') ||
+            (replyTo.nick_name.length >= 2 && probe.includes(replyTo.nick_name)))
+        if (hit) break
+        await sleep(50)
+      }
+
+      // 顺手读一次输入区文本，仅用于日志归因，不参与流程判断
+      const probeText = await elementFinder.getMentionProbeText?.(page)
+      const taValue = await textarea.inputValue().catch(() => '')
+      const seen = `${taValue ?? ''}${probeText ?? ''}`
+      const hasMention =
+        seen.includes('@') ||
+        seen.includes('回复') ||
+        (replyTo.nick_name.length >= 2 && seen.includes(replyTo.nick_name))
+
+      // 光标移到末尾再追加正文（绝不能用 fill，会抹掉 mention）
+      await textarea.focus()
+      await page.keyboard.press('End')
+      await page.keyboard.insertText(message)
+      const tType = Date.now()
+      // 分阶段耗时（只有真 @ 路径才会打，用来定位「慢在哪一段」）
+      mentionLog?.info(
+        `[耗时] 清框${tClear - t0}ms 找评论${tFind - tClear}ms 点回复${tClick - tFind}ms 等+输入${
+          tType - tClick
+        }ms 合计${tType - t0}ms`,
+      )
+      if (hasMention) {
+        mentionLog?.info(`真 @ 成功：[${replyTo.nick_name}] ${brief}`)
+      } else {
+        mentionLog?.info(
+          `已发送（未检测到 mention，按带 mention 发送）：[${replyTo.nick_name}] ${brief}`,
+        )
+        // 顺手留一份 DOM 快照（30s 限流）。流程不受影响，纯粹为了事后能查清
+        // 「到底是没插上，还是插了但读取不到」。
+        await dumpCommentItemDom(item, '未检测到 mention')
+      }
+      return true
+    } catch (err) {
+      mentionLog?.error(`真 @ 异常，降级纯文本：「${brief}」`, err)
+      await clearTextarea()
+      return false
+    }
+  }
+
   return Result.pipe(
-    // 填写评论内容（带重试）
-    fillComment(),
+    // 填写评论内容：
+    // - 传了 replyTo（真 @）时优先点评论插 @token，任何失败都回退纯文本；
+    // - 没传 replyTo 时完全走原有 fillComment 路径，行为与改动前一致。
+    replyTo && (await tryMentionReply()) ? Result.succeed(true) : await fillComment(),
     // 点击置顶选项
     Result.andThen(_ => (pinTop ? clickPinTopButton(page) : Result.succeed(false))),
     // 发送评论（含重试与回车兜底）

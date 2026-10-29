@@ -37,6 +37,42 @@ export interface IElementFinder {
   getPinTopLabel(
     page: Page,
   ): Result.ResultAsync<ElementHandle<SVGElement | HTMLElement>, PlatformError>
+
+  /**
+   * 真 @ 专用：在互动评论列表里按内容找到目标那条评论的节点。
+   *
+   * 可选实现——只有抖音/百应的中控台才有该评论列表 DOM；未实现或找不到时
+   * 返回 null，调用方会自动回退到纯文本发送，不会丢回复。
+   *
+   * 返回 ElementHandle 或 Locator 均可：helper 只用它做「点击触发回复」和 DOM 快照。
+   */
+  findCommentItem?(
+    page: Page,
+    content: string,
+  ): Promise<ElementHandle<SVGElement | HTMLElement> | Locator | null>
+
+  /**
+   * 真 @ 专用：找到目标评论后，触发平台的「回复」动作
+   * （通常是「点评论唤出悬浮工具栏 → 点工具栏里的回复项」），
+   * 让平台把 mention 插进评论输入框。
+   *
+   * 各平台的评论列表 DOM 与悬浮工具栏结构完全不同，由各平台自行实现；
+   * 未实现时 helper 会用内置的默认实现（百应那套），再不行就退化成点评论本体。
+   */
+  clickMentionEntry?(
+    page: Page,
+    item: ElementHandle<SVGElement | HTMLElement> | Locator,
+  ): Promise<void>
+
+  /**
+   * 真 @ 专用：读取「输入区当前是否已插入 mention」的判定文本。
+   *
+   * 默认用评论输入框的 value 判定，但有些平台（视频号）把 mention 渲染成输入框之外
+   * 的 chip——输入框里显示着「回复 昵称」，可 textarea 的 value 是空的，
+   * 光读 value 永远判定不到。这种平台应实现本方法，返回整个输入容器的文本
+   * （chip 的文本会包含在里面）。返回 null = 用默认判定。
+   */
+  getMentionProbeText?(page: Page): Promise<string | null>
 }
 
 /**

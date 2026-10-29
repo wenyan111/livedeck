@@ -44,6 +44,15 @@ export const SELECTORS = {
     /** 置顶的勾选框 */
     PIN_TOP_LABEL: '#input-comment-block-id label',
   },
+  /**
+   * 直播互动评论列表（真 @ 专用）。
+   * 点击其中某条评论，平台会自动在评论输入框插入 `@昵称` 的 mention token。
+   * 注意：只有中控台互动评论（source='control'）才有这个列表，直播大屏没有。
+   */
+  commentList: {
+    WRAPPER: '#comment-list-wrapper',
+    ITEM: '#comment-list-wrapper div[class^="commentItem"]',
+  },
   overlays: {
     /** 长时间不操作弹窗的关闭按钮 */
     AFK_CLOSE_BUTTON:

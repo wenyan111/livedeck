@@ -233,7 +233,13 @@ function sendConfiguredReply(
     if (content) {
       const message = replaceUsername(content, sourceMessage.nick_name, config.hideUsername)
       // 注意：这里是异步的，但我们不等待它完成（串行由 sendMessage 内部队列保证）
-      sendMessage(accountId, message, errorHandler, sourceMessage.nick_name)
+      sendMessage(
+        accountId,
+        message,
+        errorHandler,
+        sourceMessage.nick_name,
+        buildReplyTarget(sourceMessage),
+      )
     }
   }
 }
@@ -351,6 +357,29 @@ const SEND_TIMEOUT_MS = 30000
  */
 const SERIAL_SEND_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set(['wxchannel'])
 
+/**
+ * 启用「真 @」（mention 回复）的平台。
+ *
+ * 百应：点评论唤出操作栏 → 点第一个图标「回复」（实测 22/0，100%）。
+ * 视频号：点评论唤出悬浮工具条 → 点「回复」项（2026-10-28 用户截图证实会插入
+ *         「回复 @昵称」结构）。
+ * 快手  ：hover 评论唤出 3 个圆形图标 → 点**第 3 个**「回复」（2026-10-29 用户截图
+ *         确认从左到右是 置顶 / 转发 / 回复，深色气泡提示指向第 3 个）。
+ * 小红书 / 蒲公英：hover 评论浮出操作按钮 → 点**第 1 个**「回复」（2026-10-29 用户确认）。
+ *         两者共用同一套 element-finder（蒲公英 performComment 直接委托给小红书）。
+ * 其他平台一律不传 replyTo，主进程完全不会走 mention 路径，行为与改动前一致。
+ */
+const MENTION_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set([
+  'buyin',
+  'wxchannel',
+  'kuaishou',
+  'xiaohongshu',
+  'pgy',
+])
+
+/** 已经提示过「平台不支持真@」的账号，避免每条回复都刷一条告警 */
+const loggedUnsupportedMentionAccounts = new Set<string>()
+
 /** 同一账号的回复发送队列（按账号串行，仅对需要串行的平台启用） */
 const sendQueues = new Map<string, Promise<void>>()
 /** 每个账号排队中的回复数（用于限流，避免发送卡住时无限积压） */
@@ -371,9 +400,15 @@ async function sendMessageDirectly(
   content: string,
   errorHandler: ReturnType<typeof useErrorHandler>['handleError'],
   who: string,
+  mentionTarget?: ReplyTarget,
 ) {
   try {
-    await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.sendReply, accountId, content)
+    await window.ipcRenderer.invoke(
+      IPC_CHANNELS.tasks.autoReply.sendReply,
+      accountId,
+      content,
+      mentionTarget,
+    )
     writeAutoReplyLog('success', `已回复${who}：${content}`)
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
@@ -382,11 +417,28 @@ async function sendMessageDirectly(
   }
 }
 
+/**
+ * 构造「真 @」目标。没有正文内容的评论（进场 / 点赞 / 关注等事件）返回 undefined，
+ * 调用方传 undefined 时主进程走原有纯文本路径。
+ */
+function buildReplyTarget(comment: Message): ReplyTarget | undefined {
+  const content = 'content' in comment ? comment.content : undefined
+  // ⚠️ 只要求「有正文」，**不能再要求 msg_id**（2026-10-29 踩坑）。
+  // 真 @ 路径只用 content / nick_name 去评论列表里找人，msg_id 根本用不到；
+  // 但小红书（千帆/蒲公英）的评论监听器**完全不提供 msg_id**
+  // （视频号给的是 clientMsgId、快手给的是 commentId，小红书没有这个字段），
+  // 于是小红书永远拿不到 replyTo —— 表现就是「一次真 @ 都没跑过、日志里连
+  // 未走真@ 的告警都没有」。缺省用空串即可。
+  if (!content?.trim()) return undefined
+  return { msg_id: comment.msg_id ?? '', nick_name: comment.nick_name, content }
+}
+
 async function sendMessage(
   accountId: string,
   content: string,
   errorHandler: ReturnType<typeof useErrorHandler>['handleError'],
   nickname?: string,
+  replyTo?: ReplyTarget,
 ) {
   const who = nickname ? `观众 [${nickname}] ` : ''
   if (!content) {
@@ -396,8 +448,32 @@ async function sendMessage(
   }
   // 其他平台维持原来的「直接发送」行为，不做任何改动
   const platform = useLiveControlStore.getState().contexts[accountId]?.platform
+  // 真 @ 三重闸门：① 平台支持（仅百应）② 用户在设置里打开开关 ③ 成功拿到了目标评论。
+  // 任一不满足就传 undefined，主进程完全走原有纯文本路径。
+  const mentionEnabled =
+    useAutoReplyConfigStore.getState().contexts[accountId]?.config?.comment?.mentionReply
+      ?.enable === true
+  const mentionPlatformOk = !!platform && MENTION_PLATFORMS.has(platform)
+  const mentionTarget = replyTo && mentionEnabled && mentionPlatformOk ? replyTo : undefined
+  // 诊断（2026-10-29 加）：平台支持真@、但最终没走真@时，把**三个闸门的实际值**
+  // 一次性写进日志。之前这条路径完全静默（主进程连 [耗时] 都不会打），只能靠
+  // 「日志里没有记录」去猜，小红书就这么卡了半天。
+  // 每个账号只打一次，避免每条回复刷屏。
+  if (
+    !mentionTarget &&
+    (mentionPlatformOk || !!replyTo) &&
+    !loggedUnsupportedMentionAccounts.has(accountId)
+  ) {
+    loggedUnsupportedMentionAccounts.add(accountId)
+    writeAutoReplyLog(
+      'warn',
+      `未走真@：平台=${platform ?? '(空)'} 平台支持=${mentionPlatformOk ? '是' : '否'}` +
+        ` 开关=${mentionEnabled ? '开' : '关'} replyTo=${replyTo ? '有' : '无'}`,
+    )
+  }
+
   if (!platform || !SERIAL_SEND_PLATFORMS.has(platform)) {
-    return sendMessageDirectly(accountId, content, errorHandler, who)
+    return sendMessageDirectly(accountId, content, errorHandler, who, mentionTarget)
   }
 
   const depth = sendQueueDepth.get(accountId) ?? 0
@@ -417,6 +493,7 @@ async function sendMessage(
         IPC_CHANNELS.tasks.autoReply.sendReply,
         accountId,
         content,
+        mentionTarget,
       )
       await Promise.race([
         sent,
@@ -504,7 +581,7 @@ const handleKeywordReply = (
     const content = getRandomElement(rule.contents)
     if (content) {
       const message = replaceUsername(content, comment.nick_name, config.hideUsername)
-      sendMessage(accountId, message, errorHandler, comment.nick_name)
+      sendMessage(accountId, message, errorHandler, comment.nick_name, buildReplyTarget(comment))
       // 注意：关键字回复不通过 addReply 添加到界面，直接发送
       return true // 匹配成功
     }
@@ -568,7 +645,13 @@ const handleAIReply = async (
       onReply(replyText)
       // 自动发送
       if (autoSend) {
-        sendMessage(accountId, replyText, errorHandler, comment.nick_name)
+        sendMessage(
+          accountId,
+          replyText,
+          errorHandler,
+          comment.nick_name,
+          buildReplyTarget(comment),
+        )
       } else {
         writeAutoReplyLog(
           'warn',

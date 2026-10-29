@@ -27,7 +27,8 @@ export function createSendBatchMessageTask(
           message = insertRandomSpaces(message)
         }
 
-        const result = await platform.performComment(message)
+        // replyTo 为 undefined 时 performComment 完全走原有纯文本路径
+        const result = await platform.performComment(message, undefined, config.replyTo)
         if (Result.isFailure(result)) {
           return task.stop(TaskStopReason.ERROR, result.error)
         }

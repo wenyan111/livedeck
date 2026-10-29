@@ -13,17 +13,22 @@ function ensureLogsDir() {
   try {
     fs.mkdirSync(app.getPath('logs'), { recursive: true })
   } catch {
-    // 极少数情况下 app 尚未就绪，后续 resolvePath 会再次尝试
+    // 极少数情况下 app 尚未就绪，后续 resolvePathFn 会再次尝试
   }
 }
 ensureLogsDir()
 const fileTransport = electronLog.transports.file
-const defaultResolvePath = fileTransport.resolvePath
-fileTransport.resolvePath = variables => {
+// ⚠️ 必须覆写 resolvePathFn（electron-log v5 真正使用的属性）。
+// 早期版本误覆写了 resolvePath：该属性默认并不存在，赋上它反而会被 electron-log
+// 当成「用户自定义路径函数」替换掉默认的 resolvePathFn，而当时返回的是
+// app.getPath('logs')（目录而非文件），导致每次写日志都 EISDIR 失败——
+// 表现为 main.log 从装上那一秒起就一行都不再增长。
+const defaultResolvePathFn = fileTransport.resolvePathFn
+fileTransport.resolvePathFn = (variables, message) => {
   ensureLogsDir()
-  return defaultResolvePath
-    ? defaultResolvePath.call(fileTransport, variables)
-    : app.getPath('logs')
+  return defaultResolvePathFn
+    ? defaultResolvePathFn.call(fileTransport, variables, message)
+    : path.join(app.getPath('logs'), 'main.log')
 }
 
 const appRoot = path.join(app.getAppPath(), path.sep)

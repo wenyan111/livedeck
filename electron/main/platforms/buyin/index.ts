@@ -108,8 +108,8 @@ export class BuyinPlatform
     return this.mainPage
   }
 
-  async performComment(message: string, pinTop: boolean) {
-    return await DouyinPlatform.prototype.performComment.call(this, message, pinTop)
+  async performComment(message: string, pinTop?: boolean, replyTo?: ReplyTarget) {
+    return await DouyinPlatform.prototype.performComment.call(this, message, pinTop, replyTo)
   }
 
   startCommentListener(onComment: (comment: LiveMessage) => void, source: 'control' | 'compass') {

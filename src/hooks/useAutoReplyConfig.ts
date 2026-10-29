@@ -37,6 +37,17 @@ interface AutoReplyBaseConfig {
       provider: string
       model: string
     }
+    /**
+     * 真 @（mention）回复。
+     * 开启后，自动回复会先点击中控台评论列表里那条观众评论，让平台自动插入
+     * `@昵称` 标识，再在后面追加回复正文——发出的是平台可识别的「回复该观众」，
+     * 对方能收到通知；关闭时保持原有行为（正文里的 `{用户名}` 只是纯文本 @）。
+     *
+     * 目前仅巨量百应（buyin）、视频号（wxchannel）的中控台支持；其他平台即使开启也不会生效。
+     */
+    mentionReply: {
+      enable: boolean
+    }
   }
   blockList: string[]
   filterKeywords: (string | FilterKeywordItem)[]
@@ -99,6 +110,9 @@ export const createDefaultConfig = (): AutoReplyConfig => {
         useReplyModel: true,
         provider: 'deepseek',
         model: '',
+      },
+      mentionReply: {
+        enable: false,
       },
     },
     room_enter: {
@@ -211,6 +225,9 @@ export const useAutoReplyConfig = () => {
     },
     updateAIFilterSettings: (settings: DeepPartial<AutoReplyConfig['comment']['aiFilter']>) => {
       store.updateConfig(currentAccountId, { comment: { aiFilter: settings } })
+    },
+    updateMentionReplyEnabled: (enable: boolean) => {
+      store.updateConfig(currentAccountId, { comment: { mentionReply: { enable } } })
     },
     updateGeneralSettings: (
       settings: DeepPartial<Pick<AutoReplyConfig, 'entry' | 'hideUsername'>>,

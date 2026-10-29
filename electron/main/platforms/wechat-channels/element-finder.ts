@@ -5,6 +5,7 @@ import {
   ElementNotFoundError,
   type PlatformError,
 } from '#/errors/PlatformError'
+import electronLog from '#/logger'
 import { commonElementFinder, type IElementFinder, queryAcrossFrames } from '../IElementFinder'
 import { SELECTORS } from './constant'
 
@@ -12,6 +13,8 @@ type WechatChannelElementFinder = IElementFinder & {
   getNewCommentButton(page: Page): Result.ResultAsync<Locator, PlatformError>
   getComments(page: Page): Result.ResultAsync<Locator[], PlatformError>
   getPinCommentActionItem(page: Page): Locator
+  /** 真 @ 专用：悬浮工具条里的「回复」项（与 getPinCommentActionItem 同构） */
+  getReplyActionItem(page: Page): Locator
 }
 
 export const wechatChannelElementFinder: WechatChannelElementFinder = {
@@ -126,5 +129,192 @@ export const wechatChannelElementFinder: WechatChannelElementFinder = {
     return page.locator(
       '.live-message-container .action-popover .action-popover__action-item:text("上墙")',
     )
+  },
+
+  getReplyActionItem(page: Page) {
+    // ⚠️ 不要依赖 `action-popover__action-item` 这个 class。
+    // 2026-10-29 日志实测：工具条文本已经读成「上墙  回复  禁言  拉黑」（说明「回复」
+    // 确实在 DOM 里），但按 class 匹配不到 → 报「未点到『回复』」、白降级成纯文本。
+    // 改成**纯文字精确匹配**，与 class 脱钩。
+    return page.locator('.live-message-container .action-popover :text-is("回复")')
+  },
+
+  /**
+   * 真 @ 专用：视频号的 mention 是渲染在 textarea **之外**的 chip。
+   * 点完「回复」输入框里显示「回复 昵称」，但 `.live-message-input-container textarea`
+   * 的 inputValue() 是空的（用户 2026-10-28 截图证实），所以必须回整个输入容器的文本
+   * 才能判定 mention 是否已插入。chip 的文本会包含在容器文本里。
+   */
+  async getMentionProbeText(page: Page) {
+    try {
+      const iframe = page.locator(SELECTORS.LIVE_CONTROL_IFRAME)
+      const container = iframe.locator('.live-message-input-container')
+      if ((await container.count()) === 0) return null
+      // 只取「回复 xxx」/「@xxx」这类 chip 文本，**不要整个容器**：
+      // 容器里还有占位符「主播发言」、字数、智能回复等固定文案，整段返回会干扰判定，
+      // 导致 helper 的「@ 出现即走」永远命不中、白等满 500ms
+      // （2026-10-29 实测：视频号「等+输入」中位数 527ms，几乎都是这段白等）。
+      const chip = await container
+        .first()
+        .evaluate(el =>
+          Array.from(el.querySelectorAll('*'))
+            .map(n => (n.textContent ?? '').trim())
+            .filter(t => t.startsWith('回复') || t.startsWith('@'))
+            .join(' '),
+        )
+        .catch(() => '')
+      return chip ?? ''
+    } catch {
+      return null
+    }
+  },
+
+  /**
+   * 真 @ 专用：在评论列表里按内容找到目标那条评论。
+   *
+   * 与 pinComment 保持同构（同样的 iframe 作用域、同样的「新消息」按钮预加载、
+   * 同样的倒序文本匹配），只是匹配从「全等」放宽到「包含」——评论内容可能被
+   * 平台截断，且我们要容忍前后空白差异。
+   */
+  async findCommentItem(page: Page, content: string) {
+    const target = (content ?? '').trim()
+    if (!target) return null
+
+    // 与上墙同款：先点「新消息」按钮把最新评论加载出来，否则列表可能还是旧的。
+    // ⚠️ 用 **dispatchEvent（合成 click）** 而不是 Playwright 的 click：
+    // 后者带 actionability 等待（可见/稳定/可点击），这个按钮经常「可见但不可点」，
+    // 实测视频号「找评论」中位数 608ms 几乎全耗在等它可点上。合成 click 立即返回，
+    // 点不动也无所谓——下面照样在现有列表里找。
+    const newCommentButton = await this.getNewCommentButton(page)
+    if (Result.isSuccess(newCommentButton)) {
+      await newCommentButton.value.dispatchEvent('click').catch(() => {})
+    }
+
+    const iframe = page.locator(SELECTORS.LIVE_CONTROL_IFRAME)
+    const items = iframe.locator('.live-message-item-container .message-content')
+    // 一次性取回全部评论文本：原来逐条 `items.nth(i).textContent()` 是 14 次跨进程往返
+    // （每次 10~20ms），evaluateAll 只往返一次。
+    const texts = await items
+      .evaluateAll(nodes => nodes.map(n => (n.textContent ?? '').trim()))
+      .catch(() => [] as string[])
+    const count = texts.length
+    // 必须倒序：新评论追加在列表底部，最后匹配的才是刚进来的那条。
+    // 正序会在重复内容时命中更早的同名评论，把 @ 安到别人头上。
+    for (let i = count - 1; i >= 0; i--) {
+      const text = texts[i]
+      if (text && (text === target || text.includes(target))) {
+        return items.nth(i)
+      }
+    }
+    // 没找到：把列表规模和末尾几条打出来，用于区分「评论被顶出列表」和「文本匹配不上」
+    // （直播间能看到 ≠ 中控台评论列表里还有，这两者经常不一致）
+    const tail = texts
+      .slice(Math.max(0, count - 3))
+      .filter(Boolean)
+      .map(t => (t.length > 24 ? `${t.slice(0, 24)}…` : t))
+    electronLog
+      .scope('真@回复')
+      .warn(
+        `视频号评论列表未命中：列表共 ${count} 条，末尾 [${tail.join(' | ')}]，目标「${
+          target.length > 24 ? `${target.slice(0, 24)}…` : target
+        }」`,
+      )
+    return null
+  },
+
+  /**
+   * 真 @ 专用：点中评论 → 唤出悬浮工具条 → 点「回复」项，
+   * 让平台把「回复 @昵称」结构插进评论输入框（用户 2026-10-28 截图证实该行为）。
+   *
+   * 工具条的位置有两种可能（现有 getPinCommentActionItem 用的是主框架 locator
+   * 且实测可用，但评论本身在 .wujie_iframe 里），所以两条路都试。
+   */
+  async clickMentionEntry(page: Page, item: ElementHandle<SVGElement | HTMLElement> | Locator) {
+    // 1. 唤出工具条并点「回复」——最多试 2 轮。
+    //    ⚠️ 视频号是**点击**评论唤出工具条，不是悬停（用户 2026-10-29 明确）。
+    //    所以这里**不做**合成 hover、也不移动真实鼠标——多余的 hover 反而可能让
+    //    浮动层停留在别的行上（表现为工具条只有「上墙」一项）。
+    //    为什么要重试：2026-10-29 实测有些时候浮动层**只渲染出「上墙」一项**
+    //    （诊断日志：工具条=「上墙」子项[div.action-popover__wrp]），「回复」还没出来
+    //    就被读走了；这时重新悬停一次往往就能拿到完整菜单。
+    const candidates = [
+      // 文字精确匹配（主路径，与 class 脱钩）
+      this.getReplyActionItem(page),
+      page
+        .locator(SELECTORS.LIVE_CONTROL_IFRAME)
+        .locator('.live-message-container .action-popover :text-is("回复")'),
+      // 兜底：老版本 class（万一哪天文字被替换成图标）
+      page
+        .locator(SELECTORS.LIVE_CONTROL_IFRAME)
+        .locator(
+          '.live-message-container .action-popover .action-popover__action-item:text("回复")',
+        ),
+    ]
+    let picked = false
+    for (let attempt = 0; attempt < 2 && !picked; attempt++) {
+      // 第 1 轮用**合成 click**（立即返回，不熬 actionability），第 2 轮才真实点击兜底。
+      // 视频号是纯点击唤出工具条，合成 click 走的是同一套 React 事件委托，通常够用；
+      // 实测「点回复」中位数 652ms，大头就是 Playwright click 的 actionability 等待。
+      if (attempt === 0) {
+        await item.dispatchEvent('click').catch(() => {})
+      } else {
+        try {
+          await item.click({ timeout: 800 })
+        } catch {
+          await item.dispatchEvent('click').catch(() => {})
+        }
+      }
+
+      // 轮询窗口：合成那轮 500ms（够浮动层渲染），真实点击那轮 600ms
+      const deadline = Date.now() + (attempt === 0 ? 500 : 600)
+      while (Date.now() < deadline) {
+        for (const locator of candidates) {
+          try {
+            if ((await locator.count()) > 0) {
+              await locator.first().click({ timeout: 1000 })
+              picked = true
+              break
+            }
+          } catch {
+            // 换下一条路
+          }
+        }
+        if (picked) break
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+    }
+    if (picked) return
+
+    // 轮询完仍没点到「回复」：把工具条的实际状态打出来。
+    // action-popover 是浮动层，不在评论节点内部，所以必须在有 page 的地方抓——
+    // 否则 main.log 里只有百应专属的 operationWrapper，对视频号毫无诊断价值。
+    try {
+      // 诊断：除了文案，把工具条**子项的真实 class** 一起打出来。
+      // 用户 2026-10-29 的 DevTools 截图显示：上墙/回复 是带 `data-v-xxxx` 的普通 div，
+      // **没有** `action-popover__action-item` 这个 class —— 之前按 class 匹配必然落空。
+      const popoverInfo = await page
+        .locator('.live-message-container .action-popover')
+        .first()
+        .evaluate(el => {
+          const txt = (el.textContent ?? '').trim().slice(0, 48)
+          const kids = Array.from(el.children)
+            .map(c => {
+              const cls = typeof c.className === 'string' ? c.className.trim() : ''
+              return `${c.tagName.toLowerCase()}${cls ? `.${cls.split(/\s+/).join('.')}` : ''}`
+            })
+            .slice(0, 6)
+            .join(' , ')
+          return `「${txt}」子项[${kids}]`
+        })
+        .catch(() => null)
+      const itemText = ((await item.textContent()) ?? '').trim()
+      electronLog
+        .scope('真@回复')
+        .warn(
+          `视频号未点到「回复」：工具条=${popoverInfo ?? '(无 .action-popover)'}，评论「${itemText.slice(0, 30)}」`,
+        )
+    } catch {
+      // 诊断失败不影响主流程
+    }
   },
 }

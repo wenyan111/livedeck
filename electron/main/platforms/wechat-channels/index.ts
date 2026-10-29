@@ -352,10 +352,10 @@ export class WechatChannelPlatform
     )
   }
 
-  async performComment(message: string) {
+  async performComment(message: string, pinTop?: boolean, replyTo?: ReplyTarget) {
     return Result.pipe(
       ensurePage(this.mainPage),
-      Result.andThen(page => comment(page, elementFinder, message, false)),
+      Result.andThen(page => comment(page, elementFinder, message, pinTop, replyTo)),
     )
   }
 

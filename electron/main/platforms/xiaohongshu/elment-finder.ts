@@ -1,6 +1,7 @@
 import { Result } from '@praha/byethrow'
 import type { ElementHandle, Page } from 'playwright'
 import { ElementDisabledError, ElementNotFoundError } from '#/errors/PlatformError'
+import electronLog from '#/logger'
 import { commonElementFinder, type IElementFinder } from '../IElementFinder'
 import { SELECTORS, TEXTS } from './constant'
 import {
@@ -79,7 +80,22 @@ async function readGoodsIndex(
   return null
 }
 
-export const xiaohongshuElementFinder: IElementFinder = {
+/** 悬停后操作栏里「回复」的序号（0-based）：用户确认小红书是**第 1 个** */
+const REPLY_ICON_INDEX = 0
+/** DOM 快照限流间隔，防直播高峰刷爆日志 */
+const DOM_DUMP_INTERVAL_MS = 30_000
+let lastDomDumpAt = 0
+
+type XiaohongshuElementFinder = IElementFinder & {
+  findCommentItem(
+    page: Page,
+    content: string,
+  ): Promise<ElementHandle<SVGElement | HTMLElement> | null>
+  clickMentionEntry(page: Page, item: ElementHandle<SVGElement | HTMLElement>): Promise<void>
+  getMentionProbeText(page: Page): Promise<string | null>
+}
+
+export const xiaohongshuElementFinder: XiaohongshuElementFinder = {
   async getPopUpButtonFromGoodsItem(item: ElementHandle<SVGElement | HTMLElement>) {
     // 1. 语义 / 新版标记（由 goods-list.ts 打标）
     const marked = await item.$(`[${MARK.POPUP}]`)
@@ -309,5 +325,182 @@ export const xiaohongshuElementFinder: IElementFinder = {
 
   async getPinTopLabel() {
     return commonElementFinder.getEmptyPinTopLabel()
+  },
+
+  /**
+   * 真 @ 专用：按内容在互动评论列表里找到目标那条评论。
+   *
+   * 小红书/蒲公英的评论区常嵌在 iframe 里（`#redlive-pgy-app`），所以**逐 frame** 尝试。
+   * 结构（用户 2026-10-29 DevTools 截图实测）：
+   *   `.comments.no-emoji > .comment-list > .comment-list-item`
+   * 倒序匹配：新评论追加在列表底部，正序会在重复内容时 @ 到更早的那条。
+   */
+  async findCommentItem(page: Page, content: string) {
+    const target = (content ?? '').trim()
+    if (!target) return null
+
+    for (const frame of page.frames()) {
+      for (const selector of SELECTORS.COMMENT_LIST.ITEM_CANDIDATES) {
+        let items: ElementHandle<SVGElement | HTMLElement>[] = []
+        try {
+          items = (await frame.$$(selector)) as ElementHandle<SVGElement | HTMLElement>[]
+        } catch {
+          continue
+        }
+        if (items.length === 0) continue
+        for (let i = items.length - 1; i >= 0; i--) {
+          const text = ((await items[i].textContent().catch(() => '')) ?? '').trim()
+          if (!text) continue
+          if (text.includes(target)) return items[i]
+          // 超长评论在列表里可能被截断成「前半段…」，按前缀再比一次
+          const clipped = text.replace(/[.。…\s]+$/, '').trim()
+          if (clipped.length >= 4 && target.startsWith(clipped)) return items[i]
+        }
+      }
+    }
+    // 找不到：评论已被刷出可见列表（中控台只保留最近若干条）
+    return null
+  },
+
+  /**
+   * 真 @ 专用：悬停评论 → 点操作栏的**第 1 个**按钮（=「回复」）。
+   *
+   * 用户 2026-10-29 确认：小红书是**悬停**评论后浮出按钮、**第 1 个**是回复
+   * （这点和视频号不同——视频号是点击触发）。
+   * hover 用「合成事件 + 真实鼠标移动」双保险：合成事件触发 JS 监听，
+   * 真实移动触发 CSS :hover（合成事件做不到后者）。
+   */
+  async clickMentionEntry(page: Page, item: ElementHandle<SVGElement | HTMLElement>) {
+    const log = electronLog.scope('真@回复')
+
+    // ① 合成 hover：沿祖先链逐层派发（mouseover 冒泡、mouseenter 不冒泡）
+    await item
+      .evaluate(el => {
+        let cur: HTMLElement | null = el as HTMLElement
+        for (let i = 0; i < 5 && cur; i++) {
+          for (const type of ['mouseover', 'mouseenter', 'mousemove']) {
+            cur.dispatchEvent(
+              new MouseEvent(type, { bubbles: true, cancelable: true, composed: true }),
+            )
+          }
+          cur = cur.parentElement
+        }
+      })
+      .catch(() => {})
+
+    // ② 真实鼠标移到评论上（触发 CSS :hover）
+    const box = await item.boundingBox().catch(() => null)
+    if (box && box.width > 0 && box.height > 0) {
+      await page.mouse
+        .move(box.x + box.width * 0.5, box.y + box.height / 2, { steps: 2 })
+        .catch(() => {})
+    }
+
+    // ③ 轮询点第 1 个图标
+    const deadline = Date.now() + 800
+    let lastReport: { count: number; icons: string[] } | null = null
+    while (Date.now() < deadline) {
+      // 注意：传给 evaluate 的函数会被序列化到页面里执行，不能引用模块作用域变量
+      const res = await item
+        .evaluate((el, idx) => {
+          const row = el as HTMLElement
+          const rr = row.getBoundingClientRect()
+          // 操作按钮浮在行内右侧；左半区是头像/昵称，排除掉
+          const rightHalfX = rr.left + rr.width * 0.55
+          const isIcon = (n: HTMLElement) => {
+            const r = n.getBoundingClientRect()
+            if (r.width === 0 || r.height === 0) return false
+            if (r.width > 40 || r.height > 40) return false
+            if (r.left + r.width / 2 < rightHalfX) return false
+            const cls = typeof n.className === 'string' ? n.className : ''
+            return (
+              n.tagName === 'BUTTON' ||
+              n.getAttribute('role') === 'button' ||
+              !!n.querySelector('svg') ||
+              /icon|btn|button|action|operat|tool/i.test(cls)
+            )
+          }
+          const collect = (root: HTMLElement) => {
+            const all = Array.from(root.querySelectorAll<HTMLElement>('*')).filter(isIcon)
+            // 父子同时命中只留最内层
+            const list = all.filter(n => !all.some(m => m !== n && n.contains(m)))
+            list.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+            return list
+          }
+          // 先在行内找；不够就放大到行的父容器（防浮动层挂在行外）
+          let icons = collect(row)
+          if (icons.length <= idx && row.parentElement) {
+            icons = collect(row.parentElement)
+          }
+          if (icons.length > idx) {
+            const target = icons[idx]
+            const html = target.outerHTML.slice(0, 180)
+            target.click()
+            return { ok: true, count: icons.length, picked: html, icons: [] as string[] }
+          }
+          return {
+            ok: false,
+            count: icons.length,
+            picked: '',
+            icons: icons.map(n => n.outerHTML.slice(0, 80)),
+          }
+        }, REPLY_ICON_INDEX)
+        .catch(() => null)
+
+      if (res?.ok) return
+      if (res) lastReport = { count: res.count, icons: res.icons }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    // ④ 失败诊断（30s 限流）：把行内右半区的图标和祖先链打出来，便于收敛选择器
+    if (Date.now() - lastDomDumpAt > DOM_DUMP_INTERVAL_MS) {
+      lastDomDumpAt = Date.now()
+      const chain = await item
+        .evaluate(el => {
+          const out: string[] = []
+          let cur: HTMLElement | null = el as HTMLElement
+          for (let i = 0; i < 5 && cur; i++) {
+            const cls = typeof cur.className === 'string' ? cur.className.trim() : ''
+            out.push(`${cur.tagName.toLowerCase()}${cls ? `.${cls.split(/\s+/).join('.')}` : ''}`)
+            cur = cur.parentElement
+          }
+          return out.join(' < ')
+        })
+        .catch(() => '')
+      log.warn(
+        `小红书未点到「回复」：右半区图标数=${lastReport?.count ?? 0}` +
+          `，图标=${(lastReport?.icons ?? []).join(' || ') || '(无)'}` +
+          `，祖先链=${chain || '(读取失败)'}`,
+      )
+    }
+  },
+
+  /**
+   * 真 @ 专用：读取输入区是否已有 mention。
+   * 小红书回复框是 textarea，平台一般把「@昵称」当纯文本插进 value；
+   * 万一渲染成输入框外的 chip，再补读输入容器内以 @ 开头的元素文本。
+   */
+  async getMentionProbeText(page: Page) {
+    try {
+      for (const frame of page.frames()) {
+        for (const selector of SELECTORS.COMMENT_INPUT.TEXTAREA_CANDIDATES) {
+          const el = await frame.$(selector).catch(() => null)
+          if (!el) continue
+          const value = await el.inputValue().catch(() => '')
+          const chip = await frame
+            .$$eval('.comment-input *', els =>
+              els
+                .map(e => (e.textContent ?? '').trim())
+                .filter(t => t.startsWith('@'))
+                .join(' '),
+            )
+            .catch(() => '')
+          return `${value ?? ''} ${chip ?? ''}`.trim()
+        }
+      }
+      return null
+    } catch {
+      return null
+    }
   },
 }

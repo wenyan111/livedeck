@@ -81,8 +81,13 @@ export class XiaohongshuPgyPlatform
     return XiaohongshuPlatform.prototype.performPopup.apply(this, args)
   }
 
-  async performComment(message: string) {
-    return XiaohongshuPlatform.prototype.performComment.call(this, message)
+  // ⚠️ 必须原样转发全部参数（2026-10-29 踩坑）。
+  // 原来只写了 `performComment(message: string)` 并在内部 `call(this, message)`，
+  // 于是 **pinTop 和 replyTo 全被丢掉** —— 真 @ 的 replyTo 到不了主进程，
+  // `tryMentionReply` 第一行 `if (!replyTo ...) return false` 直接静默返回，
+  // 表现就是「小红书/蒲公英一次真 @ 都不走、日志里连一条告警都没有」。
+  async performComment(...args: Parameters<IPerformComment['performComment']>) {
+    return XiaohongshuPlatform.prototype.performComment.apply(this, args)
   }
 
   async startCommentListener(onComment: (comment: LiveMessage) => void) {

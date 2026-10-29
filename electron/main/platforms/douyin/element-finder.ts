@@ -87,4 +87,40 @@ export const douyinElementFinder: IElementFinder = {
   async getCommentTextarea(page: Page) {
     return commonElementFinder.getCommentTextarea(page, SELECTORS.commentInput.TEXTAREA)
   },
+
+  /**
+   * 真 @ 专用：在互动评论列表里找到与 content 匹配的那条评论节点。
+   *
+   * 找不到时返回 null（评论已滚出列表 / 超长被截断 / 列表还没渲染出来），
+   * 调用方会回退到纯文本发送，保证回复照样发得出去。
+   *
+   * 按内容匹配而非 msg_id：中控台评论 DOM 上拿不到稳定可读的 msg_id，只能用内容。
+   * 去掉了早期的「内容少于 4 字就放弃」门槛——直播间里「好」「在」「想要」这类
+   * 短弹幕很常见，卡掉它们等于大部分评论都不真 @。改用下面两条来控制误匹配：
+   *   1) 倒序找（新评论追加在列表底部，最后一个匹配项才是刚进来的那条）；
+   *   2) 只有内容实在匹配不上时才走截断前缀兜底。
+   */
+  async findCommentItem(page: Page, content: string) {
+    const target = (content ?? '').trim()
+    if (!target) return null
+
+    const items = await page.$$(SELECTORS.commentList.ITEM)
+    // 必须倒序：评论列表是「新评论追加在底部」。正序找会在短内容 / 重复内容时
+    // 命中更早的同名评论，把 @ 安到别人头上——直播间是公开场景，@ 错人很尴尬。
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i]
+      const text = ((await item.textContent()) ?? '').trim()
+      if (!text) continue
+      // 正常情况：节点文本包含整条评论内容
+      if (text.includes(target)) {
+        return item as ElementHandle<SVGElement | HTMLElement>
+      }
+      // 兜底：超长评论在列表里可能被截断成「前半段…」，按前缀再比一次
+      const clipped = text.replace(/[.。…\s]+$/, '').trim()
+      if (clipped.length >= 4 && target.startsWith(clipped)) {
+        return item as ElementHandle<SVGElement | HTMLElement>
+      }
+    }
+    return null
+  },
 }
