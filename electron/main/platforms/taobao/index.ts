@@ -178,10 +178,12 @@ export class TaobaoPlatform implements IPlatform, IPerformPopup, IPerformComment
     )
   }
 
-  async performComment(message: string) {
+  async performComment(message: string, pinTop?: boolean, replyTo?: ReplyTarget) {
+    // 2026-10-30：接上 replyTo，淘宝也能走真 @（之前第 4 个参数写死 false，
+    // 且签名里没有 replyTo，所以「回复某条评论」这条链路对淘宝完全没生效）。
     return Result.pipe(
       ensurePage(this.mainPage),
-      Result.andThen(page => comment(page, elementFinder, message, false)),
+      Result.andThen(page => comment(page, elementFinder, message, pinTop ?? false, replyTo)),
     )
   }
 

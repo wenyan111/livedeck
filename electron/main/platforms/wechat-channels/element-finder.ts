@@ -150,20 +150,22 @@ export const wechatChannelElementFinder: WechatChannelElementFinder = {
       const iframe = page.locator(SELECTORS.LIVE_CONTROL_IFRAME)
       const container = iframe.locator('.live-message-input-container')
       if ((await container.count()) === 0) return null
-      // 只取「回复 xxx」/「@xxx」这类 chip 文本，**不要整个容器**：
-      // 容器里还有占位符「主播发言」、字数、智能回复等固定文案，整段返回会干扰判定，
-      // 导致 helper 的「@ 出现即走」永远命不中、白等满 500ms
-      // （2026-10-29 实测：视频号「等+输入」中位数 527ms，几乎都是这段白等）。
-      const chip = await container
-        .first()
-        .evaluate(el =>
-          Array.from(el.querySelectorAll('*'))
-            .map(n => (n.textContent ?? '').trim())
-            .filter(t => t.startsWith('回复') || t.startsWith('@'))
-            .join(' '),
-        )
-        .catch(() => '')
-      return chip ?? ''
+      // ★★ 关键（2026-10-29 用户录屏逐帧实证）：视频号的「回复 @昵称」**不是** chip、
+      // 也**不在** textarea 的 value 里，而是写在了 textarea 的 **placeholder** 上：
+      //   点完工具条「回复」→ <textarea placeholder="回复 牛**">
+      // 之前读 `container.textContent()` —— placeholder 不属于 textContent，
+      // 于是**永远**判定「未检测到 mention」，把一直成功的真@误报成失败。
+      const ta = await queryAcrossFrames(page, [SELECTORS.commentInput.TEXTAREA])
+      if (!ta) return null
+      const placeholder = ((await ta.getAttribute('placeholder').catch(() => '')) ?? '').trim()
+      const value = ((await ta.inputValue().catch(() => '')) ?? '').trim()
+      // helper 的判定是 `includes('@') || includes(nick_name)`；昵称可能被打码（「牛**」），
+      // 未必等于 replyTo.nick_name，所以把「回复」规范成「@」，
+      // 保证「平台已进入回复态」这个事实一定能被识别。
+      const probe = placeholder.startsWith('回复')
+        ? `@${placeholder.replace(/^回复\s*/, '')}`
+        : placeholder
+      return `${probe} ${value}`.trim()
     } catch {
       return null
     }
@@ -252,21 +254,16 @@ export const wechatChannelElementFinder: WechatChannelElementFinder = {
     ]
     let picked = false
     for (let attempt = 0; attempt < 2 && !picked; attempt++) {
-      // 第 1 轮用**合成 click**（立即返回，不熬 actionability），第 2 轮才真实点击兜底。
-      // 视频号是纯点击唤出工具条，合成 click 走的是同一套 React 事件委托，通常够用；
-      // 实测「点回复」中位数 652ms，大头就是 Playwright click 的 actionability 等待。
-      if (attempt === 0) {
+      // 视频号是**点击**评论唤出工具条（用户 2026-10-29 明确，不是悬停）。
+      // 两轮都用真实点击，点不动再退到合成 click。
+      try {
+        await item.click({ timeout: 1200 })
+      } catch {
         await item.dispatchEvent('click').catch(() => {})
-      } else {
-        try {
-          await item.click({ timeout: 800 })
-        } catch {
-          await item.dispatchEvent('click').catch(() => {})
-        }
       }
 
-      // 轮询窗口：合成那轮 500ms（够浮动层渲染），真实点击那轮 600ms
-      const deadline = Date.now() + (attempt === 0 ? 500 : 600)
+      // 轮询窗口 800ms
+      const deadline = Date.now() + 800
       while (Date.now() < deadline) {
         for (const locator of candidates) {
           try {

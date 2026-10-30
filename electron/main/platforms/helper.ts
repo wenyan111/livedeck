@@ -74,7 +74,10 @@ export async function comment(
     const MAX_TRIES = 4
     /** 点击后等待评论框被清空的最长时间（平台提交 + 清空需要一点时间） */
     const SENT_TIMEOUT_MS = 1500
-    const POLL_MS = 200
+    // 轮询间隔 200ms → 80ms（2026-10-30 提速）：平台提交后清空输入框通常 100~300ms 内完成，
+    // 200ms 一跳等于平均多等 100ms、最坏白等 200ms。实测视频号「提交确认」中位 1.29s，
+    // 是各平台里最大的一笔非 AI 开销。
+    const POLL_MS = 80
 
     /** 回读评论框：内容里已不含待发消息 → 视为已提交（成功发送的平台都会清空输入框） */
     async function isCleared(): Promise<boolean> {
@@ -377,16 +380,21 @@ export async function comment(
 
       // 等平台把 mention 插进输入框。
       // 原来是**固定 sleep(500)**——每次白等半秒。改成轮询输入区文本：
-      // 一旦读到 @ / 昵称就立刻往下走，最多仍等 500ms（不改变失败行为，
-      // 只是把「等满」变成「出现即走」，实测平均省 300ms 左右）。
-      // 没实现 getMentionProbeText 的平台（百应/抖音）行为完全不变。
+      // 一旦读到 @ / 昵称就立刻往下走，最多仍等 500ms（不改变失败行为）。
+      //
+      // ⚠️ 2026-10-30：这里必须**同时读 textarea 的 value**。
+      // 百应（抖音）没有自定义探针，它的 mention 是直接写进 textarea 的 value 的
+      // （既不是 chip 也不是 placeholder）；原来只看 getMentionProbeText，
+      // 百应拿到的恒定是 undefined → 每次都白等满 500ms（实测「等+输入」中位 544ms）。
+      // 读不到就照旧等满，行为不退化。
       const waitDeadline = Date.now() + 500
       while (Date.now() < waitDeadline) {
         const probe = await elementFinder.getMentionProbeText?.(page)
+        const val = await textarea.inputValue().catch(() => '')
+        const cur = `${val ?? ''}${probe ?? ''}`
         const hit =
-          !!probe &&
-          (probe.includes('@') ||
-            (replyTo.nick_name.length >= 2 && probe.includes(replyTo.nick_name)))
+          !!cur &&
+          (cur.includes('@') || (replyTo.nick_name.length >= 2 && cur.includes(replyTo.nick_name)))
         if (hit) break
         await sleep(50)
       }
@@ -409,7 +417,9 @@ export async function comment(
       mentionLog?.info(
         `[耗时] 清框${tClear - t0}ms 找评论${tFind - tClear}ms 点回复${tClick - tFind}ms 等+输入${
           tType - tClick
-        }ms 合计${tType - t0}ms`,
+        }ms 合计${tType - t0}ms | 探针=${
+          (probeText ?? '(null)').replace(/\s+/g, ' ').trim().slice(0, 40) || '(空)'
+        } | 插入值=${(taValue ?? '').replace(/\s+/g, ' ').trim().slice(0, 40) || '(空)'}`,
       )
       if (hasMention) {
         mentionLog?.info(`真 @ 成功：[${replyTo.nick_name}] ${brief}`)

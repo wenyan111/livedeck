@@ -109,14 +109,35 @@ export const douyinElementFinder: IElementFinder = {
     // 命中更早的同名评论，把 @ 安到别人头上——直播间是公开场景，@ 错人很尴尬。
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i]
-      const text = ((await item.textContent()) ?? '').trim()
-      if (!text) continue
-      // 正常情况：节点文本包含整条评论内容
-      if (text.includes(target)) {
+      // ★★ 只拿**正文区**比对，不要用整行 textContent（2026-10-30 事故修复）。
+      //
+      // 事故现象：抖音把 @ 插到了**主播自己**头上 ——
+      //   「@亲爱的黎子（瘦身版）姐妹，给您备注好凝胶+加急咯」
+      // 原因：整行文本 = 昵称 + 正文，而**我们自己上一条回复**（以及主播的开价话术）
+      // 里也含有目标词（比如「加急」），倒序扫描时先命中了那条 → 点它的 @ → @ 到自己。
+      // 所以这里：
+      //   1) 只比正文（[class*=description]）；
+      //   2) 跳过以 @ 开头的正文（那是回复/mention，多半就是我们自己发的）；
+      //   3) 跳过昵称带「主播」标签的行（主播自己发的消息，绝不能 @ 自己）。
+      const info = await item
+        .evaluate(el => {
+          const d = el.querySelector('[class*="description"]') as HTMLElement | null
+          const n = el.querySelector('[class*="nickname"]') as HTMLElement | null
+          return {
+            desc: ((d?.textContent ?? el.textContent) || '').trim(),
+            nick: (n?.textContent ?? '').trim(),
+          }
+        })
+        .catch(() => ({ desc: '', nick: '' }))
+      if (!info.desc) continue
+      if (info.desc.startsWith('@')) continue
+      if (info.nick.includes('主播')) continue
+      // 正常情况：正文包含整条评论内容
+      if (info.desc.includes(target)) {
         return item as ElementHandle<SVGElement | HTMLElement>
       }
       // 兜底：超长评论在列表里可能被截断成「前半段…」，按前缀再比一次
-      const clipped = text.replace(/[.。…\s]+$/, '').trim()
+      const clipped = info.desc.replace(/[.。…\s]+$/, '').trim()
       if (clipped.length >= 4 && target.startsWith(clipped)) {
         return item as ElementHandle<SVGElement | HTMLElement>
       }

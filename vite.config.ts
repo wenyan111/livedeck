@@ -9,7 +9,11 @@ import pkg from './package.json'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
-  rmSync('dist-electron', { recursive: true, force: true })
+  // 正常构建时清空产物目录；设 SKIP_CLEAN=1 可跳过
+  //（自动化环境里删除文件会被权限拦住，跳过即可复用旧产物继续打包）
+  if (!process.env.SKIP_CLEAN) {
+    rmSync('dist-electron', { recursive: true, force: true })
+  }
 
   const isServe = command === 'serve'
   const isBuild = command === 'build'

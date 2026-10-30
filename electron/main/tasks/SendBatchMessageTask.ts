@@ -2,6 +2,7 @@ import { Result } from '@praha/byethrow'
 import type { ScopedLogger } from '#/logger'
 import { insertRandomSpaces, randomInt, replaceVariant, sleep } from '#/utils'
 import type { IPerformComment } from './../platforms/IPlatform'
+import { withCommentSendLock } from './../platforms/sendLock'
 import { createTask } from './BaseTask'
 import { TaskStopReason } from './ITask'
 
@@ -27,8 +28,12 @@ export function createSendBatchMessageTask(
           message = insertRandomSpaces(message)
         }
 
-        // replyTo 为 undefined 时 performComment 完全走原有纯文本路径
-        const result = await platform.performComment(message, undefined, config.replyTo)
+        // replyTo 为 undefined 时 performComment 完全走原有纯文本路径。
+        // 加发送串行锁：开价话术（另一种任务类型）可能正在往同一个输入框里发，
+        // 两者并发会互相覆盖/抢发送按钮，导致其中一条被吞（2026-10-29 用户实测）。
+        const result = await withCommentSendLock(platform, () =>
+          platform.performComment(message, undefined, config.replyTo),
+        )
         if (Result.isFailure(result)) {
           return task.stop(TaskStopReason.ERROR, result.error)
         }

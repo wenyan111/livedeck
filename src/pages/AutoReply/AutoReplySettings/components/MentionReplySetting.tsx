@@ -6,9 +6,9 @@ import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 /**
  * 「真 @ 观众」开关：控制自动回复是否以平台可识别的 mention 形式回复观众。
  *
- * 仅在巨量百应（buyin）、视频号（wxchannel）、快手（kuaishou）、小红书（xiaohongshu）
- * / 蒲公英（pgy）的中控台下渲染——其他平台没有「点评论插入 @昵称」的能力，
- * 渲染出来也只会是一个无效开关。
+ * 支持哪些平台由 `src/abilities.ts` 的 `mention` 能力决定（`mentionPlatforms`）：
+ * 巨量百应 / 抖音小店 / 视频号 / 快手 / 小红书千帆 / 蒲公英 / 淘宝。
+ * 其他平台没有「点评论插入 @昵称」的能力，渲染出来也只会是一个无效开关。
  */
 export function MentionReplySetting() {
   const { config, updateMentionReplyEnabled } = useAutoReplyConfig()

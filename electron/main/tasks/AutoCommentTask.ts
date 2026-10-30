@@ -5,6 +5,7 @@ import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { AbortError } from '#/errors/AppError'
 import type { ScopedLogger } from '#/logger'
 import type { IPerformComment } from '#/platforms/IPlatform'
+import { withCommentSendLock } from '#/platforms/sendLock'
 import { insertRandomSpaces, randomInt, replaceVariant, takeScreenshot } from '#/utils'
 import windowManager from '#/windowManager'
 import { createIntervalTask } from './IntervalTask'
@@ -103,7 +104,11 @@ export function createAutoCommentTask(
         if (config.extraSpaces) {
           content = insertRandomSpaces(content)
         }
-        const pinTop = await platform.performComment(content, message.pinTop)
+        // 与「开价话术 / 自动回复」串行：三者都会写同一个评论输入框，
+        // 并发会互相覆盖导致其中一条被吞（2026-10-29）
+        const pinTop = await withCommentSendLock(platform, () =>
+          platform.performComment(content, message.pinTop),
+        )
         if (Result.isFailure(pinTop)) {
           return pinTop
         }

@@ -56,6 +56,12 @@ type Ability = {
     send: boolean
     selfDetect: boolean
   }
+  /**
+   * 是否支持「真 @ 观众」（mention 回复）——即实现了 findCommentItem +
+   * 点评论插 @token 的能力。决定自动回复设置页是否渲染那个开关。
+   * 2026-10-30 新增淘宝；此前是页面里写死一份白名单，容易和真实能力漂移。
+   */
+  mention?: boolean
 }
 
 export const abilities: Record<LiveControlPlatform, Ability> = {
@@ -63,12 +69,14 @@ export const abilities: Record<LiveControlPlatform, Ability> = {
     autoReply: {
       source: ['compass', 'control'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: true },
   },
   buyin: {
     autoReply: {
       source: ['compass', 'control'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: true },
   },
   eos: {},
@@ -76,36 +84,42 @@ export const abilities: Record<LiveControlPlatform, Ability> = {
     autoReply: {
       source: ['kuaishou'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: false },
   },
   wxchannel: {
     autoReply: {
       source: ['wechat-channel'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: true },
   },
   xiaohongshu: {
     autoReply: {
       source: ['xiaohongshu'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: false },
   },
   pgy: {
     autoReply: {
       source: ['xiaohongshu'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: false },
   },
   taobao: {
     autoReply: {
       source: ['taobao'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: false },
   },
   dev: {
     autoReply: {
       source: ['compass', 'control', 'wechat-channel', 'xiaohongshu', 'taobao'],
     },
+    mention: true,
     openPrice: { send: true, selfDetect: false },
   },
 }
@@ -117,6 +131,11 @@ export const autoReplyPlatforms = Object.entries(abilities)
 /** 能用「开价话术」页面的平台（都能发送话术） */
 export const openPricePlatforms = Object.entries(abilities)
   .filter(([_, s]) => s.openPrice?.send)
+  .map(([p, _]) => p) as LiveControlPlatform[]
+
+/** 支持「真 @ 观众」的平台（决定自动回复设置页是否渲染那个开关） */
+export const mentionPlatforms = Object.entries(abilities)
+  .filter(([_, s]) => s.mention)
   .map(([p, _]) => p) as LiveControlPlatform[]
 
 /** 能自己检测开价的平台，只有这些能开「开始任务」监听 */

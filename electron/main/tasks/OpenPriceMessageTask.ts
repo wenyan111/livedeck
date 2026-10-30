@@ -1,6 +1,7 @@
 import { Result } from '@praha/byethrow'
 import type { ScopedLogger } from '#/logger'
 import { type IPlatform, isPerformComment, isPinComment } from '#/platforms/IPlatform'
+import { withCommentSendLock } from '#/platforms/sendLock'
 import { replaceVariant, sleep } from '#/utils'
 import { createTask } from './BaseTask'
 import { TaskStopReason } from './ITask'
@@ -85,7 +86,11 @@ export function createOpenPriceMessageTask(
           if (!task.isRunning()) {
             break
           }
-          const result = await commentPlatform.performComment(message, pinTop)
+          // 与「自动回复」串行：两者都会写同一个评论输入框，并发会互相覆盖
+          // （用户实测：开价话术发送时观众评论刚好进来，AI 回复被吞）2026-10-29
+          const result = await withCommentSendLock(commentPlatform, () =>
+            commentPlatform.performComment(message, pinTop),
+          )
           if (Result.isSuccess(result)) {
             sent = true
             break

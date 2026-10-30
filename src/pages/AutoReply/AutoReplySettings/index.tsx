@@ -1,6 +1,7 @@
 import { ArrowLeft } from 'lucide-react'
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router'
+import { mentionPlatforms } from '@/abilities'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -29,14 +30,10 @@ import { WechatChannelSetting } from './components/WechatChannelSetting'
 export default function AutoReplySettings() {
   const { config } = useAutoReplyConfig()
   const navigate = useNavigate()
-  // 「真 @」支持：巨量百应、视频号、快手、小红书 / 蒲公英，其他平台不渲染这个开关
+  // 「真 @」支持哪些平台，统一由 abilities.ts 的 mention 能力决定
+  // （2026-10-30 之前这里写死一份白名单，加淘宝时漏了，导致开关不出现）
   const platform = useCurrentLiveControl(ctx => ctx.platform)
-  const showMentionSetting =
-    platform === 'buyin' ||
-    platform === 'wxchannel' ||
-    platform === 'kuaishou' ||
-    platform === 'xiaohongshu' ||
-    platform === 'pgy'
+  const showMentionSetting = platform ? mentionPlatforms.includes(platform) : false
 
   const ExtraSetting = useMemo(() => {
     switch (config.entry) {

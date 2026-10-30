@@ -280,10 +280,26 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
           //   1) 搜索范围先收到**评论区容器**（public-list-wrap / comment-set / comment-items）；
           //   2) 只保留**叶子节点**（没有子元素）——评论正文本身就是叶子 span，
           //      这样一步同时完成「取最内层」，省掉第二次 O(n) 扫描。
+          // ⚠️ 2026-10-30 修正：**不能**把 `comment-set` 当评论区容器。
+          // 实测（诊断日志）快手页面上的 `comment-set--H5DfM` 是**回复输入区的快捷回复面板**
+          // （其叶子文本是「发送」「设置快捷评论」「可长时间使用…」），
+          // 一旦 `public-list-wrap` 不存在就会落到它上面 → 整段评论正文一个都搜不到，
+          // 表现就是「快手没成功一条」。
+          // 现在只认真正的评论列表容器；都找不到就退回全文档（慢一点但正确），
+          // 输入区的引用块由下面的 inReplyArea 排到队尾处理。
+          // ★ 评论区容器缓存（2026-10-30 提速）：第一次成功后记住装着这条评论的滚动容器，
+          // 之后优先只在小范围里扫叶子节点。否则页面没有 public-list-wrap / comment-items 时
+          // 会退到 document.body，几千个元素扫一遍要 600ms 左右（实测离群样本 616ms）。
+          // 缓存的元素被卸载就自动失效；范围内找不到候选时，下面的代码还会回退全文档扫描，
+          // 所以**正确性不退化**，只是把"能找到"的常见情况变快。
+          const w = window as unknown as { __ksCommentScope?: HTMLElement }
+          const cached = w.__ksCommentScope?.isConnected ? w.__ksCommentScope : null
           const scope =
+            cached ??
             document.querySelector<HTMLElement>(
-              '[class*="public-list-wrap"], [class*="comment-set"], [class*="comment-items"]',
-            ) ?? document.body
+              '[class*="public-list-wrap"], [class*="comment-items"]',
+            ) ??
+            document.body
           const visible = (el: HTMLElement) => {
             const r = el.getBoundingClientRect()
             return r.width > 0 && r.height > 0
@@ -298,7 +314,25 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
               el => norm(el.textContent).includes(t) && visible(el),
             )
             if (matched.length === 0) {
-              return { found: 0, verified: false, diag: [] as string[], hints: [] as string[] }
+              // 诊断（2026-10-30）：文本在页面上一个都匹配不到时，把线索带回去。
+              // 之前这里直接返回空 diag，外层 `return null` 完全静默 —— 日志里只看得到
+              // 「未在评论列表找到」，无法区分是「评论被顶出列表」还是「列表根本不在这个
+              // document 里（shadow DOM / 别的 frame）」。
+              const sample = leaves
+                .slice(-6)
+                .map(el => norm(el.textContent).slice(0, 14))
+                .filter(Boolean)
+              return {
+                found: 0,
+                verified: false,
+                diag: [
+                  `scope=${String(scope.className || '(body)').slice(0, 28)}`,
+                  `leaves=${leaves.length}`,
+                  `listItem=${document.querySelectorAll('[class*="list-item"]').length}`,
+                  `末尾=${sample.join('|') || '(空)'}`,
+                ],
+                hints: [] as string[],
+              }
             }
             const minD = Math.min(...matched.map(el => el.querySelectorAll('*').length))
             all = matched.filter(el => el.querySelectorAll('*').length === minD)
@@ -442,6 +476,17 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
           // 都没唤出工具条：退而求其次用最新的那个候选，
           // 让 clickMentionEntry 走完并输出 DOM 快照，便于下轮收敛
           if (!winner) winner = candidates[0]
+          // 验证通过就缓存容器：从命中的那条往上找最近的「有多个子元素且足够高」的祖先，
+          // 那就是评论滚动容器；取不到就不缓存（下次照旧全文档扫，不影响正确性）。
+          if (verified) {
+            let cur: HTMLElement | null = winner
+            for (let i = 0; i < 8 && cur && cur !== document.body; i++) {
+              const r = cur.getBoundingClientRect()
+              if (cur.children.length >= 3 && r.height > 120) break
+              cur = cur.parentElement
+            }
+            w.__ksCommentScope = cur && cur !== document.body ? cur : undefined
+          }
           winner.setAttribute('data-ks-mention-target', '1')
           // 找不到真评论时，顺带把「评论/列表/消息」相关 class 名报出来，
           // 下次就能直接写死选择器，不用再猜
@@ -480,6 +525,9 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
               }
             })
             .catch(() => {})
+        } else {
+          // 本帧一个文本都没匹配到：把诊断带回去，继续查其它 frame
+          frameMsgs.push(`${frame.url().slice(0, 40)}→未匹配 ${diag.diag.join(',')}`)
         }
       } catch {
         // 跨域 / 已销毁的 frame 跳过
@@ -494,7 +542,16 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
         )
       return fallback
     }
-    // 文本在页面上都找不到：该评论已被顶出评论列表（列表只保留最近若干条）
+    // 文本在页面上都找不到：把每个 frame 的线索打出来。
+    // 之前这里是**静默** return null，日志里只剩一句「未在评论列表找到」，
+    // 完全无法归因 —— 2026-10-30 用户截图证明评论明明在列表里，却一直接不到。
+    electronLog
+      .scope('真@回复')
+      .warn(
+        `快手评论列表未命中（${page.frames().length} 个 frame 均无匹配文本）：${
+          frameMsgs.join(' ## ') || '(无诊断)'
+        }，目标「${target.length > 24 ? `${target.slice(0, 24)}…` : target}」`,
+      )
     return null
   },
 

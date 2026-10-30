@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
+import { mentionPlatforms } from '@/abilities'
 import { AUTO_REPLY } from '@/constants'
 import { EVENTS, eventEmitter } from '@/utils/events'
 import { matchObject } from '@/utils/filter'
@@ -369,13 +370,9 @@ const SERIAL_SEND_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set(['wxchan
  *         两者共用同一套 element-finder（蒲公英 performComment 直接委托给小红书）。
  * 其他平台一律不传 replyTo，主进程完全不会走 mention 路径，行为与改动前一致。
  */
-const MENTION_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set([
-  'buyin',
-  'wxchannel',
-  'kuaishou',
-  'xiaohongshu',
-  'pgy',
-])
+// 真 @ 支持哪些平台，统一从 abilities.ts 派生（2026-10-30 收敛）。
+// 之前这里和设置页各维护一份白名单，加淘宝时两处都漏了 —— 开关不出现、功能也不生效。
+const MENTION_PLATFORMS: ReadonlySet<LiveControlPlatform> = new Set(mentionPlatforms)
 
 /** 已经提示过「平台不支持真@」的账号，避免每条回复都刷一条告警 */
 const loggedUnsupportedMentionAccounts = new Set<string>()

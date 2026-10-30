@@ -71,11 +71,22 @@ export class AccountSession {
   private openPriceMissCount = 0
 
   constructor(
-    platformName: LiveControlPlatform,
+    private platformName: LiveControlPlatform,
     private account: Account,
     private logger = createLogger(`@${account.name}`),
   ) {
     this.platform = new platformFactory[platformName]()
+  }
+
+  /**
+   * 是否启用 CDP 焦点模拟（让页面以为自己是聚焦/活跃的，解决"中控台在后台不刷新"）。
+   *
+   * ⚠️ 百应系（buyin / douyin）必须关掉（2026-10-30 事故）：百应的「回复」按钮靠
+   * hover 唤出，强行改 focus 语义后出现「点到了别的行」，把 @ 插到主播自己头上。
+   * 该现象在启用焦点模拟之前从未出现，所以按平台关闭，其它平台保持开启。
+   */
+  private get focusEmulation() {
+    return this.platformName !== 'buyin' && this.platformName !== 'douyin'
   }
 
   async connect(config: { headless?: boolean; storageState?: string }) {
@@ -85,7 +96,9 @@ export class AccountSession {
       storageState = JSON.parse(config.storageState)
     }
 
-    this.browserSession = await browserManager.createSession(config.headless, storageState)
+    this.browserSession = await browserManager.createSession(config.headless, storageState, {
+      focusEmulation: this.focusEmulation,
+    })
 
     await this.ensureAuthenticated(this.browserSession, config.headless)
 
@@ -175,7 +188,9 @@ export class AccountSession {
       if (headless) {
         await this.browserSession.browser.close()
         this.logger.info('需要登录，请在打开的浏览器中登录')
-        this.browserSession = await browserManager.createSession(false)
+        this.browserSession = await browserManager.createSession(false, undefined, {
+          focusEmulation: this.focusEmulation,
+        })
       }
       // 等待登录
       await this.platform.login(this.browserSession)
@@ -185,7 +200,9 @@ export class AccountSession {
       if (headless) {
         await this.browserSession.browser.close()
         this.logger.info('登录成功，浏览器将继续以无头模式运行')
-        this.browserSession = await browserManager.createSession(headless, storageState)
+        this.browserSession = await browserManager.createSession(headless, storageState, {
+          focusEmulation: this.focusEmulation,
+        })
       }
       await this.ensureAuthenticated(this.browserSession, headless)
     }
