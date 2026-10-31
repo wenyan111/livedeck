@@ -54,6 +54,8 @@ export type ConfigPayload = {
   format: typeof FORMAT
   version: number
   exportedAt: string
+  /** 被跳过的空壳账号（名字为空 / 名字是 uuid），只是提示用 */
+  skippedShellAccounts?: number
   accounts: ExportedAccount[]
   stores: Record<string, Persisted>
   dataEntry: {
@@ -85,6 +87,52 @@ function readStore(key: string): Persisted | null {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 是不是「空壳账号」：名字为空、或者名字本身就是一串 uuid。
+ *
+ * 这类账号是历史遗留（早期有流程用 id 当名字建账号），没有任何真实配置，
+ * 导出时带过去只会在新机器上多出几条看不懂的条目（实测：导入后冒出
+ * 「抖音小店 · 7e413243-1c31-4989-…」这种）。所以导出时直接跳过。
+ */
+function isShellAccount(name: string | undefined): boolean {
+  const n = (name ?? '').trim()
+  return n.length === 0 || UUID_RE.test(n)
+}
+
+/** 递归删掉指定 accountId 对应的属性（和 remapAccountKeys 同一套结构假设） */
+function dropAccountKeys<T>(value: T, dropped: Set<string>): T {
+  if (Array.isArray(value)) {
+    return value.map(v => dropAccountKeys(v, dropped)) as unknown as T
+  }
+  if (!isPlainObject(value)) return value
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (dropped.has(k)) continue
+    out[k] = dropAccountKeys(v, dropped)
+  }
+  return out as unknown as T
+}
+
+/**
+ * 清理本机的空壳账号（名字为空 / 名字是 uuid）。
+ *
+ * 导入过一版旧文件后，新机器上可能已经长出了几条「抖音小店 · 7e413243-…」这种条目，
+ * 导出过滤只能防以后，清不掉已经存在的，所以给一个一键清理入口。
+ * 至少保留一个账号（和 removeAccount 的约束一致）。
+ */
+export function cleanupShellAccounts(): { removed: number } {
+  const shells = useAccounts.getState().accounts.filter(a => isShellAccount(a.name))
+  let removed = 0
+  for (const acc of shells) {
+    if (useAccounts.getState().accounts.length <= 1) break
+    useAccounts.getState().removeAccount(acc.id)
+    removed++
+  }
+  return { removed }
+}
+
 /** 当前这台机器上「平台 + 账号名」→ 本地 accountId */
 function localIdentityMap(): Map<string, string> {
   const contexts = useLiveControlStore.getState().contexts
@@ -99,16 +147,27 @@ function localIdentityMap(): Map<string, string> {
 /** 收集本机配置，组装成导出用的 payload */
 export async function collectConfig(): Promise<ConfigPayload> {
   const contexts = useLiveControlStore.getState().contexts
-  const accounts: ExportedAccount[] = useAccounts.getState().accounts.map(acc => ({
-    localId: acc.id,
-    name: acc.name,
-    platform: contexts[acc.id]?.platform ?? null,
-  }))
+  const all = useAccounts.getState().accounts
+  const accounts: ExportedAccount[] = all
+    .filter(acc => !isShellAccount(acc.name))
+    .map(acc => ({
+      localId: acc.id,
+      name: acc.name,
+      platform: contexts[acc.id]?.platform ?? null,
+    }))
+
+  // 空壳账号在各大 store 里还留着 empty 的 context，一并剔掉，避免新机器上重新长出孤儿数据
+  const dropped = new Set(all.filter(acc => isShellAccount(acc.name)).map(acc => acc.id))
 
   const stores: Record<string, Persisted> = {}
   for (const key of ALL_KEYS) {
     const value = readStore(key)
-    if (value) stores[key] = value
+    if (!value) continue
+    const pruned =
+      dropped.size > 0 && value.state
+        ? { ...value, state: dropAccountKeys(value.state, dropped) }
+        : value
+    stores[key] = pruned
   }
 
   // 直播日报的列配置 / 录入状态存在主进程的 json 里，一起带走
@@ -125,6 +184,7 @@ export async function collectConfig(): Promise<ConfigPayload> {
     format: FORMAT,
     version: FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
+    skippedShellAccounts: all.length - accounts.length,
     accounts,
     stores,
     dataEntry: { columns, rows },

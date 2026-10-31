@@ -1,11 +1,16 @@
-import { ArrowLeftRight, Download, Upload } from 'lucide-react'
+import { ArrowLeftRight, Download, Eraser, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { Title } from '@/components/common/Title'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import { applyConfig, collectConfig, type ImportResult } from '@/utils/configSync'
+import {
+  applyConfig,
+  cleanupShellAccounts,
+  collectConfig,
+  type ImportResult,
+} from '@/utils/configSync'
 
 type Status = { kind: 'info' | 'ok' | 'error'; text: string }
 
@@ -29,7 +34,13 @@ export default function ConfigTransfer() {
         return
       }
       const names = payload.accounts.map(a => a.name).join('、') || '(无账号)'
-      setStatus({ kind: 'ok', text: `已导出到：${filePath}\n包含账号：${names}` })
+      const skipped = payload.skippedShellAccounts ?? 0
+      setStatus({
+        kind: 'ok',
+        text:
+          `已导出到：${filePath}\n包含账号：${names}` +
+          (skipped > 0 ? `\n已跳过 ${skipped} 个空壳账号（名字为空或是 uuid 串）` : ''),
+      })
     } catch (err) {
       setStatus({ kind: 'error', text: `导出失败：${(err as Error).message}` })
     } finally {
@@ -55,6 +66,19 @@ export default function ConfigTransfer() {
     } finally {
       setBusy(null)
     }
+  }
+
+  const handleCleanup = () => {
+    const { removed } = cleanupShellAccounts()
+    setResult(null)
+    setStatus(
+      removed > 0
+        ? {
+            kind: 'ok',
+            text: `已清理 ${removed} 个空壳账号（名字为空或是 uuid 串），刷新后生效。`,
+          }
+        : { kind: 'info', text: '没有找到空壳账号。' },
+    )
   }
 
   const reload = () => window.location.reload()
@@ -86,6 +110,10 @@ export default function ConfigTransfer() {
               <Button variant="secondary" onClick={handleImport} disabled={busy !== null}>
                 <Download className="mr-2 h-4 w-4" />
                 {busy === 'import' ? '导入中…' : '导入配置'}
+              </Button>
+              <Button variant="outline" onClick={handleCleanup} disabled={busy !== null}>
+                <Eraser className="mr-2 h-4 w-4" />
+                清理空壳账号
               </Button>
             </div>
 

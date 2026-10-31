@@ -31,7 +31,8 @@ export function AccountSetting() {
   const isConnected = useCurrentLiveControl(context => context.isConnected)
   const currentAccount = accounts.find(acc => acc.id === currentAccountId)
   const handleDeleteAccount = useMemoizedFn(async () => {
-    if (currentAccountId === 'default') return
+    // 只剩一个账号时不允许删（删完应用就没有当前账号了）
+    if (accounts.length <= 1) return
     // 先断开连接
     if (isConnected === 'connected') {
       await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.liveControl.disconnect, currentAccountId)
@@ -53,7 +54,7 @@ export function AccountSetting() {
             <span className="text-sm text-muted-foreground">当前账号：</span>
             <span className="font-medium">{currentAccount?.name}</span>
           </div>
-          {currentAccountId !== 'default' ? (
+          {accounts.length > 1 ? (
             isConnected === 'disconnected' ? (
               <Button
                 variant="destructive"
@@ -73,7 +74,7 @@ export function AccountSetting() {
           ) : (
             <Button disabled size="sm" className="gap-2">
               <BanIcon className="h-4 w-4" />
-              <span>无法删除默认账号</span>
+              <span>至少保留一个账号</span>
             </Button>
           )}
         </div>

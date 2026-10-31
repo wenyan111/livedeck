@@ -128,7 +128,7 @@ const AccountRow = React.memo(
     status,
     connected,
     connecting,
-    isDefault,
+    isLastAccount,
     platform,
     anyRunning,
     canStart,
@@ -145,7 +145,7 @@ const AccountRow = React.memo(
     status: ConnStatus
     connected: boolean
     connecting: boolean
-    isDefault: boolean
+    isLastAccount: boolean
     platform: LiveControlPlatform
     anyRunning: boolean
     canStart: boolean
@@ -260,7 +260,7 @@ const AccountRow = React.memo(
                 <Pencil className="mr-2 h-4 w-4" />
                 重命名
               </Button>
-              {!isDefault && (
+              {!isLastAccount && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -626,7 +626,8 @@ export default function LiveControlManage() {
                 const status = statusOf(account.id)
                 const connected = status === 'connected'
                 const connecting = status === 'connecting'
-                const isDefault = account.id === 'default'
+                // 只剩这一个账号时不给删（不是「默认账号」才不给删）
+                const isLastAccount = visibleAccounts.length <= 1
                 const platform = platformOf(account.id)
                 // 未连接时一律按「没在运行」算：断线会停掉所有任务，
                 // 万一状态没复位也不会把按钮卡在「一键停止」
@@ -644,7 +645,7 @@ export default function LiveControlManage() {
                     status={status}
                     connected={connected}
                     connecting={connecting}
-                    isDefault={isDefault}
+                    isLastAccount={isLastAccount}
                     platform={platform}
                     anyRunning={anyRunning}
                     canStart={canStart}

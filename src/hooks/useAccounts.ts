@@ -39,12 +39,13 @@ export const useAccounts = create<AccountsStore>()(
 
       removeAccount: (id: string) => {
         set(state => {
-          if (id === 'default') {
-            return
-          }
+          // 2026-10-31 放宽：原来硬拦 `id === 'default'`，导致「默认账号」永远删不掉
+          // （用户把第一个账号改名成「视频号」后，想删也删不了）。
+          // 真正的约束只有一条：**至少要留一个账号**——整个应用都假设存在当前账号。
+          if (state.accounts.length <= 1) return
           state.accounts = state.accounts.filter(acc => acc.id !== id)
           if (state.currentAccountId === id) {
-            state.currentAccountId = 'default'
+            state.currentAccountId = state.accounts[0]?.id ?? 'default'
           }
           eventEmitter.emit(EVENTS.ACCOUNT_REMOVED, id)
         })
