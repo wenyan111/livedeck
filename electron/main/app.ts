@@ -6,8 +6,8 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { emitter } from './event/eventBus'
 import { updateManager } from './managers/UpdateManager'
-import { providerService } from './services/ProviderService'
 import { douyinDashboardService } from './services/DouyinDashboardService'
+import { providerService } from './services/ProviderService'
 import windowManager from './windowManager'
 import './ipc'
 import { createLogger } from './logger'
@@ -107,6 +107,32 @@ async function createWindow() {
   })
 
   windowManager.setMainWindow(win)
+
+  /**
+   * 窗口变小时**整页等比缩放**，而不是让布局重排挤压。
+   *
+   * 原理：页面 CSS 布局视口宽 = 窗口内容宽 / zoomFactor。按 1280 的基准宽算系数，
+   * 布局宽就恒定在 1280 —— 列宽、间距、字号全部同比例缩小，界面不变形
+   * （等价于浏览器 Ctrl+- 缩放，但由窗口宽度自动驱动）。
+   *
+   * 下限 0.7：再小字就看不清了，那时才回落到普通响应式布局（页面里有 max-xl: 的折叠样式兜底）。
+   */
+  const ZOOM_BASE_WIDTH = 1280
+  const ZOOM_MIN_FACTOR = 0.7
+  const applyZoom = () => {
+    if (!win || win.isDestroyed()) return
+    const [contentWidth] = win.getContentSize()
+    const factor = Math.min(1, Math.max(ZOOM_MIN_FACTOR, contentWidth / ZOOM_BASE_WIDTH))
+    win.webContents.setZoomFactor(Number(factor.toFixed(2)))
+  }
+  // 拖动窗口边会高频触发 resize，节流一下再算
+  let zoomTimer: NodeJS.Timeout | null = null
+  win.on('resize', () => {
+    if (zoomTimer) clearTimeout(zoomTimer)
+    zoomTimer = setTimeout(applyZoom, 80)
+  })
+  // 首次加载完立刻按当前尺寸缩一次（窗口可能被记住的尺寸直接开成小的）
+  win.webContents.on('did-finish-load', applyZoom)
 
   if (VITE_DEV_SERVER_URL) {
     // #298

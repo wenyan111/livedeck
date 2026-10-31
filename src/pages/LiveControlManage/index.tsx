@@ -117,8 +117,10 @@ const StatusPill = React.memo(({ status }: { status: ConnStatus }) => {
  * 功能胶囊(占剩余 minmax(0,1fr)，4 个胶囊强制同一行，放不下由组件自己降档变小) / 右侧操作(自适应)。
  * 后续要加功能，只需在这里加一列、并在 AccountRow 里补对应单元格即可，所有行自动对齐。
  */
+// 窄窗口（<1280）下 gap 收一档；再窄时右侧的状态徽标会隐藏、按钮只留图标（见下方 max-xl: 类），
+// 否则固定列 + 右列操作区会把中间的「功能胶囊」挤成一条缝
 const ROW_GRID =
-  'grid grid-cols-[18px_18px_28px_104px_minmax(56px,120px)_minmax(0,1fr)_auto] items-center gap-x-3'
+  'grid grid-cols-[18px_18px_28px_104px_minmax(56px,120px)_minmax(0,1fr)_auto] items-center gap-x-3 max-xl:gap-x-2'
 
 /** 单个账号行：拖拽手柄（仅「全部状态」下可拖）+ 勾选/平台/名称/功能胶囊/状态与操作。 */
 const AccountRow = React.memo(
@@ -199,7 +201,7 @@ const AccountRow = React.memo(
           onValueChange={value => setPlatform(account.id, value as LiveControlPlatform)}
           disabled={status !== 'disconnected'}
         >
-          <SelectTrigger className="h-7 w-[104px] text-xs">
+          <SelectTrigger className="h-7 w-[104px] whitespace-nowrap text-xs max-xl:w-[88px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -220,8 +222,10 @@ const AccountRow = React.memo(
         {/* 该账号的功能开关（与首页「一键开启」卡片同源，实时同步） */}
         <AccountFeatureToggles accountId={account.id} platform={platform} connected={connected} />
         {/* 状态 + 连接/断开 + 更多 + 一键开启/停止：统一收进最右列，右对齐，跨行严格对齐 */}
-        <div className="flex items-center justify-end gap-2">
-          <StatusPill status={status} />
+        <div className="flex items-center justify-end gap-2 max-xl:gap-1.5">
+          <div className="max-xl:hidden">
+            <StatusPill status={status} />
+          </div>
           {connected ? (
             <Button size="sm" variant="secondary" onClick={() => onDisconnectOne(account)}>
               断开
@@ -284,13 +288,13 @@ const AccountRow = React.memo(
           >
             {anyRunning ? (
               <>
-                <SquareIcon className="mr-1.5 h-4 w-4" />
-                一键停止
+                <SquareIcon className="mr-1.5 h-4 w-4 max-xl:mr-0" />
+                <span className="max-xl:hidden">一键停止</span>
               </>
             ) : (
               <>
-                <PlayIcon className="mr-1.5 h-4 w-4" />
-                一键开启
+                <PlayIcon className="mr-1.5 h-4 w-4 max-xl:mr-0" />
+                <span className="max-xl:hidden">一键开启</span>
               </>
             )}
           </Button>
