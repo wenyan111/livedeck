@@ -4,6 +4,7 @@ import AutoMessage from '@/pages/AutoMessage'
 import AutoPopUp from '@/pages/AutoPopUp'
 import AutoReply from '@/pages/AutoReply'
 import AutoReplySettings from '@/pages/AutoReply/AutoReplySettings'
+import ConfigTransfer from '@/pages/ConfigTransferPage'
 import DataEntry from '@/pages/DataEntry'
 import LiveControl from '@/pages/LiveControl'
 import LiveControlManage from '@/pages/LiveControlManage'
@@ -40,6 +41,10 @@ export const router = createHashRouter([
       {
         path: '/settings',
         element: <Settings />,
+      },
+      {
+        path: '/config-transfer',
+        element: <ConfigTransfer />,
       },
       {
         path: '/ai-chat',

@@ -111,6 +111,11 @@ export const IPC_CHANNELS = {
     getRows: 'dataEntry:getRows',
     saveRows: 'dataEntry:saveRows',
   },
+  // 配置迁移（导出/导入，换电脑时带走账号配置）
+  configTransfer: {
+    exportFile: 'configTransfer:exportFile',
+    importFile: 'configTransfer:importFile',
+  },
   log: 'log',
   app: {
     openLogFolder: 'app:openLogFolder',

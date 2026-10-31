@@ -215,6 +215,10 @@ export interface IpcChannels {
   [IPC_CHANNELS.dataEntry.getRows]: () => DataEntrySavedState | null
   [IPC_CHANNELS.dataEntry.saveRows]: (state: DataEntrySavedState) => void
 
+  // 配置迁移（账号配置导出 / 导入）
+  [IPC_CHANNELS.configTransfer.exportFile]: (payload: unknown) => string | null
+  [IPC_CHANNELS.configTransfer.importFile]: () => unknown
+
   // Log
   [IPC_CHANNELS.log]: (message: LogMessage) => void
 }

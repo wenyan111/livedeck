@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  ArrowLeftRight,
   Bot,
   FileSpreadsheet,
   Gift,
@@ -113,6 +114,12 @@ export default function Sidebar() {
       name: 'AI 助手',
       group: '智能与设置',
       icon: <Sparkles className="h-[18px] w-[18px]" />,
+    },
+    {
+      id: '/config-transfer',
+      name: '数据迁移',
+      group: '智能与设置',
+      icon: <ArrowLeftRight className="h-[18px] w-[18px]" />,
     },
     {
       id: '/settings',
