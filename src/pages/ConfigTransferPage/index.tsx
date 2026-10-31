@@ -69,15 +69,15 @@ export default function ConfigTransfer() {
   }
 
   const handleCleanup = () => {
-    const { removed } = cleanupShellAccounts()
+    const { removed, orphans } = cleanupShellAccounts()
     setResult(null)
+    const parts: string[] = []
+    if (removed > 0) parts.push(`清理空壳账号 ${removed} 个`)
+    if (orphans > 0) parts.push(`清理孤立数据 ${orphans} 条`)
     setStatus(
-      removed > 0
-        ? {
-            kind: 'ok',
-            text: `已清理 ${removed} 个空壳账号（名字为空或是 uuid 串），刷新后生效。`,
-          }
-        : { kind: 'info', text: '没有找到空壳账号。' },
+      parts.length > 0
+        ? { kind: 'ok', text: `${parts.join('，')}，刷新后生效。` }
+        : { kind: 'info', text: '没有找到空壳账号或孤立数据。' },
     )
   }
 

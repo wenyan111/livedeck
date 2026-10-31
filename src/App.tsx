@@ -29,6 +29,7 @@ import { useOpenPriceScriptStore, useOpenPriceStatusSync } from './hooks/useOpen
 import { markDisconnectedTasks, useQuickStartAutoStart } from './hooks/useQuickStart'
 import { useToast } from './hooks/useToast'
 import { useUpdateConfigStore, useUpdateStore } from './hooks/useUpdate'
+import { pruneOrphanData } from './utils/configSync'
 
 function useGlobalIpcListener() {
   const { handleComment } = useAutoReply()
@@ -126,6 +127,20 @@ function App() {
       window.ipcRenderer.invoke(IPC_CHANNELS.account.switch, { account })
     }
   }, [accounts, currentAccountId])
+
+  // 启动时清一次「指向已不存在账号」的残留数据（孤儿 context / 幽灵跟随目标）。
+  // 不这么做的话，界面会在「跟随平台」等地方兜底显示成「抖音小店 · default」
+  // 这种读不懂的条目（账号删了但各 store 的 context 还留着）。
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        pruneOrphanData()
+      } catch {
+        // 清理失败不影响正常使用
+      }
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [])
 
   useGlobalIpcListener()
   // 跨平台开价联动需要在任意页面都能响应，因此挂在这里常驻

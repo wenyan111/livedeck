@@ -6,6 +6,7 @@ import { persist } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import { openPriceSelfDetectPlatforms } from '@/abilities'
 import { useToast } from '@/hooks/useToast'
+import { EVENTS, eventEmitter } from '@/utils/events'
 import { useAccounts } from './useAccounts'
 import { useLiveControlStore } from './useLiveControl'
 import { buildOpenPriceSendMessages, useOpenPriceScriptStore } from './useOpenPriceScript'
@@ -44,6 +45,14 @@ interface OpenPriceLinkageStore {
   upsertTarget: (target: OpenPriceLinkageTarget) => void
   removeTarget: (accountId: string) => void
   setLastResult: (result: LinkageResult | null) => void
+  /**
+   * 清掉指向「已不存在的账号」的跟随目标和触发源。
+   *
+   * 背景（2026-10-31）：targets 存的是 `{accountId}`，账号删了没人清理，
+   * 于是「跟随平台」里会一直挂着几条幽灵条目 —— 界面还兜底显示成
+   * `抖音小店 · default` / `抖音小店 · 7e413243-…`（无平台、无名字时回落到 id）。
+   */
+  pruneOrphans: () => void
 }
 
 export const useOpenPriceLinkageStore = create<OpenPriceLinkageStore>()(
@@ -87,6 +96,19 @@ export const useOpenPriceLinkageStore = create<OpenPriceLinkageStore>()(
         set(state => {
           state.lastResult = result
         }),
+      pruneOrphans: () =>
+        set(state => {
+          const valid = new Set(useAccounts.getState().accounts.map(a => a.id))
+          const before = state.config.targets.length
+          state.config.targets = state.config.targets.filter(t => valid.has(t.accountId))
+          if (state.config.sourceAccountId && !valid.has(state.config.sourceAccountId)) {
+            state.config.sourceAccountId = null
+          }
+          if (state.config.targets.length !== before) {
+            // 只有真删掉了才需要触发订阅更新（immer 会产生新对象，安全）
+            state.config = { ...state.config }
+          }
+        }),
     })),
     {
       name: 'open-price-linkage-storage',
@@ -95,6 +117,12 @@ export const useOpenPriceLinkageStore = create<OpenPriceLinkageStore>()(
     },
   ),
 )
+
+// 账号被删除时立刻清掉它的跟随目标，避免「跟随平台」里留幽灵条目。
+// 放在模块作用域只注册一次（store 是单例，重复注册会导致多次 set）。
+eventEmitter.on(EVENTS.ACCOUNT_REMOVED, () => {
+  useOpenPriceLinkageStore.getState().pruneOrphans()
+})
 
 /**
  * 跨平台开价联动。

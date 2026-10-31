@@ -3,6 +3,7 @@ import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { LiveReportColumn } from 'shared/liveReportColumns'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useLiveControlStore } from '@/hooks/useLiveControl'
+import { useOpenPriceLinkageStore } from '@/hooks/useOpenPriceLinkage'
 
 /**
  * 账号配置导出 / 导入（换电脑时带走配置）。
@@ -122,7 +123,7 @@ function dropAccountKeys<T>(value: T, dropped: Set<string>): T {
  * 导出过滤只能防以后，清不掉已经存在的，所以给一个一键清理入口。
  * 至少保留一个账号（和 removeAccount 的约束一致）。
  */
-export function cleanupShellAccounts(): { removed: number } {
+export function cleanupShellAccounts(): { removed: number; orphans: number } {
   const shells = useAccounts.getState().accounts.filter(a => isShellAccount(a.name))
   let removed = 0
   for (const acc of shells) {
@@ -130,7 +131,58 @@ export function cleanupShellAccounts(): { removed: number } {
     useAccounts.getState().removeAccount(acc.id)
     removed++
   }
-  return { removed }
+  // 账号删完再扫一遍：把历史上就没清干净的孤儿 context 一并清掉
+  const orphans = pruneOrphanData()
+  return { removed, orphans }
+}
+
+/** 像 accountId 的 key：'default' 或 uuid（store 里其它 key 都是有语义的名字） */
+const ACCOUNT_KEY_RE = /^(default|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
+/**
+ * 清掉各 store 里指向「已不存在的账号」的残留（孤儿 context）。
+ *
+ * 账号删除时各 store 会通过 ACCOUNT_REMOVED 清自己的 context，但**历史遗留**的
+ * （账号早就没了、context 还在）没人处理。这些残留会让界面在「跟随平台」等地方
+ * 兜底显示成 `抖音小店 · default` / `抖音小店 · 7e413243-…`。
+ *
+ * @returns 清掉的条目数
+ */
+export function pruneOrphanData(): number {
+  const valid = new Set(useAccounts.getState().accounts.map(a => a.id))
+  let removed = 0
+
+  for (const key of PER_ACCOUNT_KEYS) {
+    const store = readStore(key)
+    if (!store?.state) continue
+    let hit = 0
+    const walk = (v: unknown): unknown => {
+      if (Array.isArray(v)) return v.map(walk)
+      if (!isPlainObject(v)) return v
+      const out: Record<string, unknown> = {}
+      for (const [k, val] of Object.entries(v)) {
+        if (ACCOUNT_KEY_RE.test(k) && !valid.has(k)) {
+          hit++
+          continue
+        }
+        out[k] = walk(val)
+      }
+      return out
+    }
+    const next = walk(store.state) as Record<string, unknown>
+    if (hit > 0) {
+      localStorage.setItem(key, JSON.stringify({ ...store, state: next }))
+      removed += hit
+    }
+  }
+
+  // 联动 store 的 targets 是数组（{accountId}），key 不是 accountId，所以单独清
+  try {
+    useOpenPriceLinkageStore.getState().pruneOrphans()
+  } catch {
+    // store 还没初始化就算了
+  }
+  return removed
 }
 
 /** 当前这台机器上「平台 + 账号名」→ 本地 accountId */
