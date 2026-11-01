@@ -2,6 +2,7 @@ import {
   AppWindow,
   ArrowLeftRight,
   Bot,
+  ChevronDown,
   FileSpreadsheet,
   Gift,
   LayoutDashboard,
@@ -11,11 +12,13 @@ import {
   Settings,
   Sparkles,
 } from 'lucide-react'
+import { useState } from 'react'
 import { NavLink } from 'react-router'
 import { autoReplyPlatforms, openPricePlatforms } from '@/abilities'
 import { useCurrentAutoMessage } from '@/hooks/useAutoMessage'
 import { useCurrentAutoPopUp } from '@/hooks/useAutoPopUp'
 import { useAutoReply } from '@/hooks/useAutoReply'
+import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { useCurrentLiveControl } from '@/hooks/useLiveControl'
 import { useCurrentOpenPriceRuntime } from '@/hooks/useOpenPriceScript'
 import { cn } from '@/lib/utils'
@@ -25,10 +28,20 @@ type SidebarGroup = '中控管理' | '自动化' | '智能与设置'
 /** 侧边栏分组顺序（结构参考豆包方案，视觉沿用本项目品牌色） */
 const SIDEBAR_GROUPS: readonly SidebarGroup[] = ['中控管理', '自动化', '智能与设置']
 
+/** 侧栏二级子项：跳到设置页的某个锚点，右侧可带「已配几条」这类摘要 */
+interface SidebarChild {
+  /** 锚点名（/auto-reply/settings#<hash>） */
+  hash: string
+  label: string
+  badge?: string | number | null
+}
+
 interface SidebarTab {
   id: string
   name: string
   group: SidebarGroup
+  /** 可展开的子项（目前只有「自动回复」用） */
+  children?: SidebarChild[]
   isRunning?: boolean
   /** 开启失败：显示红点而不是绿点 */
   hasError?: boolean
@@ -48,6 +61,31 @@ export default function Sidebar() {
   const { isRunning: isOpenPriceRunning, error: openPriceError } = useCurrentOpenPriceRuntime()
   const isOpenPriceScriptRunning = isOpenPriceRunning && isConnected === 'connected'
   const isOpenPriceScriptFailed = Boolean(openPriceError) && isConnected === 'connected'
+
+  // 「自动回复」的子项摘要（随账号切换自动变，因为 config 是按账号存的）
+  const { config: autoReplyConfig } = useAutoReplyConfig()
+  const keywordCount = autoReplyConfig.comment.keywordReply.rules.length
+  const filterCount = autoReplyConfig.filterKeywords.length + autoReplyConfig.blockList.length
+
+  // 展开状态记在本地，下次进来保持一致（默认展开，方便发现子项）
+  const [autoReplyOpen, setAutoReplyOpen] = useState(() => {
+    try {
+      return localStorage.getItem('sidebar-auto-reply-open') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const toggleAutoReply = () => {
+    setAutoReplyOpen(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('sidebar-auto-reply-open', next ? '1' : '0')
+      } catch {
+        // 隐私模式写不进去就算了
+      }
+      return next
+    })
+  }
 
   const tabs: SidebarTab[] = [
     {
@@ -101,6 +139,21 @@ export default function Sidebar() {
       isRunning: isAutoReplyRunning,
       icon: <Bot className="h-[18px] w-[18px]" />,
       platform: autoReplyPlatforms,
+      children: [
+        { hash: 'keyword', label: '关键词回复', badge: keywordCount || null },
+        {
+          hash: 'ai',
+          label: 'AI 回复',
+          badge: autoReplyConfig.comment.aiReply.enable ? '开' : null,
+        },
+        { hash: 'filter', label: '过滤与黑名单', badge: filterCount || null },
+        {
+          hash: 'mention',
+          label: '@ 回复',
+          badge: autoReplyConfig.comment.mentionReply.enable ? '开' : null,
+        },
+        { hash: 'platform', label: '平台专属' },
+      ],
     },
     {
       id: '/red-packet',
@@ -150,45 +203,81 @@ export default function Sidebar() {
               </h2>
               <nav className="space-y-1">
                 {groupTabs.map(tab => (
-                  <NavLink
-                    key={tab.id}
-                    to={tab.id}
-                    className={({ isActive }) =>
-                      cn(
-                        'group flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm transition-colors',
-                        isActive
-                          ? 'border-brand bg-muted text-foreground'
-                          : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                      )
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        <span
-                          className={cn(
-                            'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
+                  <div key={tab.id}>
+                    <div className="relative">
+                      <NavLink
+                        to={tab.id}
+                        className={({ isActive }) =>
+                          cn(
+                            'group flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm transition-colors',
                             isActive
-                              ? 'bg-brand/[0.14] text-brand'
-                              : 'bg-transparent text-muted-foreground',
-                          )}
+                              ? 'border-brand bg-muted text-foreground'
+                              : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                          )
+                        }
+                      >
+                        {({ isActive }) => (
+                          <>
+                            <span
+                              className={cn(
+                                'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
+                                isActive
+                                  ? 'bg-brand/[0.14] text-brand'
+                                  : 'bg-transparent text-muted-foreground',
+                              )}
+                            >
+                              {tab.icon}
+                            </span>
+                            <span className="flex-1 font-medium">{tab.name}</span>
+                            {tab.isRunning ? (
+                              <span
+                                className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[hsl(var(--success))]"
+                                title="运行中"
+                              />
+                            ) : tab.hasError ? (
+                              <span
+                                className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--destructive))]"
+                                title={tab.statusTip ?? '开启失败'}
+                              />
+                            ) : null}
+                          </>
+                        )}
+                      </NavLink>
+                      {tab.children && tab.children.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={toggleAutoReply}
+                          title={autoReplyOpen ? '收起子项' : '展开子项'}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/70 hover:bg-muted hover:text-foreground"
                         >
-                          {tab.icon}
-                        </span>
-                        <span className="flex-1 font-medium">{tab.name}</span>
-                        {tab.isRunning ? (
-                          <span
-                            className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[hsl(var(--success))]"
-                            title="运行中"
+                          <ChevronDown
+                            className={cn(
+                              'h-3.5 w-3.5 transition-transform',
+                              autoReplyOpen ? '' : '-rotate-90',
+                            )}
                           />
-                        ) : tab.hasError ? (
-                          <span
-                            className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--destructive))]"
-                            title={tab.statusTip ?? '开启失败'}
-                          />
-                        ) : null}
-                      </>
+                        </button>
+                      )}
+                    </div>
+                    {tab.children && autoReplyOpen && (
+                      <div className="mt-0.5 mb-1 ml-6 space-y-0.5 border-l border-border/60 pl-3">
+                        {tab.children.map(child => (
+                          <NavLink
+                            key={child.hash}
+                            to={`${tab.id}/settings#${child.hash}`}
+                            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                          >
+                            <span className="flex-1 truncate">{child.label}</span>
+                            {child.badge != null && child.badge !== '' && (
+                              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
+                                {child.badge}
+                              </span>
+                            )}
+                          </NavLink>
+                        ))}
+                      </div>
                     )}
-                  </NavLink>
+                  </div>
                 ))}
               </nav>
             </div>

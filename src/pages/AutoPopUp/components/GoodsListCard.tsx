@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAutoPopUpActions, useCurrentAutoPopUp } from '@/hooks/useAutoPopUp'
+import { useCurrentLiveControl } from '@/hooks/useLiveControl'
 import { useToast } from '@/hooks/useToast'
 import GoodsListItem from './GoodsListItem'
 import ShortcutConfigTab from './ShortcutConfigTab'
@@ -106,13 +107,20 @@ const CommonList = () => {
 
 // 商品列表卡片组件
 const GoodsListCard = React.memo(() => {
+  // 这条备注只描述**小红书**的行为（弹卡 15 秒自动收回），
+  // 挂到其它平台上会让人以为自己的平台也有这个限制，所以按平台显示。
+  const platform = useCurrentLiveControl(ctx => ctx.platform)
+  const showXhsTip = platform === 'xiaohongshu'
+
   return (
     <Card>
       <CardContent className="pt-6">
-        <p className="text-xs text-warning mb-4">
-          备注：小红书「弹卡」点击后卡片约 15 秒自动收回；在 15
-          秒倒计时内（卡片未收回时）再次点击弹卡会失败，故弹窗间隔建议 ≥ 15 秒。
-        </p>
+        {showXhsTip && (
+          <p className="text-xs text-warning mb-4">
+            备注：小红书「弹卡」点击后卡片约 15 秒自动收回；在 15
+            秒倒计时内（卡片未收回时）再次点击弹卡会失败，故弹窗间隔建议 ≥ 15 秒。
+          </p>
+        )}
         <Tabs defaultValue="goods-list" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="goods-list">商品列表</TabsTrigger>

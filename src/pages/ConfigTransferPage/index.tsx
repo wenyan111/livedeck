@@ -148,7 +148,7 @@ export default function ConfigTransfer() {
             <div className="space-y-2 text-sm text-muted-foreground">
               <p className="font-medium text-foreground">会带走什么</p>
               <p>
-                自动回复（关键词 / AI 提示词 / 黑名单 / 真 @ 开关）、开价话术、自动弹窗、批量话术、
+                自动回复（关键词 / AI 提示词 / 黑名单 / @ 回复开关）、开价话术、自动弹窗、批量话术、
                 跨平台开价联动、快速开始选中项、AI 助手的模型配置、直播日报的列配置与已填数据。
               </p>
               <p className="font-medium text-foreground pt-2">不会带走什么</p>
