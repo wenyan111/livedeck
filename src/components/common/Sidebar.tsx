@@ -13,7 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { autoReplyPlatforms, openPricePlatforms } from '@/abilities'
 import { useCurrentAutoMessage } from '@/hooks/useAutoMessage'
 import { useCurrentAutoPopUp } from '@/hooks/useAutoPopUp'
@@ -52,6 +52,9 @@ interface SidebarTab {
 }
 
 export default function Sidebar() {
+  // 进了 /auto-reply/settings/xxx 时，父项「自动回复」也要保持高亮，
+  // 否则侧栏一处高光都没有，人不知道自己在哪
+  const location = useLocation()
   const isAutoMessageRunning = useCurrentAutoMessage(context => context.isRunning)
   const isAutoPopupRunning = useCurrentAutoPopUp(context => context.isRunning)
   const { isRunning: isAutoReplyRunning } = useAutoReply()
@@ -210,7 +213,9 @@ export default function Sidebar() {
                         className={({ isActive }) =>
                           cn(
                             'group flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm transition-colors',
-                            isActive
+                            // 有子项时给右侧折叠箭头让位，否则绿点会和箭头叠在一起
+                            tab.children ? 'pr-9' : '',
+                            isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
                               ? 'border-brand bg-muted text-foreground'
                               : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
                           )
@@ -260,7 +265,7 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-0.5 mb-1 ml-6 space-y-0.5 border-l border-border/60 pl-3">
+                      <div className="mt-1.5 mb-2 ml-6 space-y-1 border-l border-border/50 pl-2.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
