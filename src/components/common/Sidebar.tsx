@@ -204,7 +204,7 @@ export default function Sidebar() {
               <h2 className="px-2 pb-2 pt-4 text-[11px] font-medium tracking-[0.12em] text-muted-foreground/70">
                 {group}
               </h2>
-              <nav className="space-y-1">
+              <nav className="space-y-1.5">
                 {groupTabs.map(tab => (
                   <div key={tab.id}>
                     <div className="relative">
@@ -212,7 +212,8 @@ export default function Sidebar() {
                         to={tab.id}
                         className={({ isActive }) =>
                           cn(
-                            'group flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm transition-colors',
+                            // 卡片式条目：圆角 + 细边框 + 底色，和设置页的卡片同一种语言
+                            'group flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors',
                             isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
                               ? 'border-brand bg-muted text-foreground'
                               : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
@@ -267,7 +268,7 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-1.5 mb-2 ml-6 space-y-1 border-l border-border/50 pl-2.5">
+                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/40 bg-muted/20 p-1.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
