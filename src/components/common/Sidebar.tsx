@@ -201,8 +201,9 @@ export default function Sidebar() {
           if (groupTabs.length === 0) return null
           return (
             <div key={group}>
-              <h2 className="px-2 pb-2 pt-4 text-[11px] font-medium tracking-[0.12em] text-muted-foreground/70">
+              <h2 className="flex items-center gap-2 px-1 pb-2 pt-5 text-[11px] font-medium tracking-[0.14em] text-foreground/45">
                 {group}
+                <span className="h-px flex-1 bg-border/60" />
               </h2>
               <nav className="space-y-1.5">
                 {groupTabs.map(tab => (
@@ -214,9 +215,11 @@ export default function Sidebar() {
                           cn(
                             // 卡片式条目：圆角 + 细边框 + 底色，和设置页的卡片同一种语言
                             'group flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors',
+                            // 浅色主题里 --card 与 --background 都是纯白，只用 bg-card 等于没底色。
+                            // 所以走 secondary（浅灰）+ primary 混合，深浅主题都能拉开层次。
                             isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
-                              ? 'border-border bg-muted text-foreground'
-                              : 'border-border/50 bg-card text-muted-foreground hover:border-border hover:bg-accent hover:text-foreground',
+                              ? 'border-primary/30 bg-primary/[0.08] text-foreground'
+                              : 'border-border bg-secondary text-muted-foreground hover:border-primary/20 hover:bg-secondary/70 hover:text-foreground',
                           )
                         }
                       >
@@ -227,14 +230,14 @@ export default function Sidebar() {
                           return (
                             <>
                               {groupActive && (
-                                <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-foreground/70" />
+                                <span className="absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
                               )}
                               <span
                                 className={cn(
                                   'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
                                   groupActive
-                                    ? 'bg-accent text-foreground'
-                                    : 'bg-transparent text-muted-foreground',
+                                    ? 'bg-primary/10 text-foreground'
+                                    : 'bg-transparent text-muted-foreground/80',
                                 )}
                               >
                                 {tab.icon}
@@ -279,7 +282,7 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/40 bg-card/60 p-1.5">
+                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border bg-secondary/70 p-1.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
@@ -288,8 +291,8 @@ export default function Sidebar() {
                               cn(
                                 'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
                                 isActive
-                                  ? 'bg-muted font-medium text-foreground'
-                                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                                  ? 'bg-primary/[0.08] font-medium text-foreground'
+                                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                               )
                             }
                           >
