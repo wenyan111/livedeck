@@ -213,8 +213,6 @@ export default function Sidebar() {
                         className={({ isActive }) =>
                           cn(
                             'group flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm transition-colors',
-                            // 有子项时给右侧折叠箭头让位，否则绿点会和箭头叠在一起
-                            tab.children ? 'pr-9' : '',
                             isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
                               ? 'border-brand bg-muted text-foreground'
                               : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
@@ -233,7 +231,11 @@ export default function Sidebar() {
                             >
                               {tab.icon}
                             </span>
-                            <span className="flex-1 font-medium">{tab.name}</span>
+                            <span
+                              className={cn('flex-1 truncate font-medium', tab.children && 'pr-5')}
+                            >
+                              {tab.name}
+                            </span>
                             {tab.isRunning ? (
                               <span
                                 className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[hsl(var(--success))]"
@@ -253,7 +255,7 @@ export default function Sidebar() {
                           type="button"
                           onClick={toggleAutoReply}
                           title={autoReplyOpen ? '收起子项' : '展开子项'}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/70 hover:bg-muted hover:text-foreground"
+                          className="absolute right-7 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground"
                         >
                           <ChevronDown
                             className={cn(
