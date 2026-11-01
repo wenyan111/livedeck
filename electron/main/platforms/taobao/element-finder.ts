@@ -152,7 +152,16 @@ export const taobaoElementFinder: IElementFinder = {
           for (const el of Array.from(document.querySelectorAll('[data-taobao-mention]'))) {
             el.removeAttribute('data-taobao-mention')
           }
-          const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, '')
+          // 去掉 [笑哭R] 这类表情短码：平台把它渲染成图片，DOM 文本里没有这串字。
+          // 只在目标确实带短码时才启用，普通评论走原来的纯空白归一化（零额外开销）。
+          const needEmojiStrip = /\[[^[\]]{1,10}\]/.test(text)
+          const norm = (s: string | null | undefined) => {
+            const base = s ?? ''
+            return (needEmojiStrip ? base.replace(/\[[^[\]]{1,10}\]/g, '') : base).replace(
+              /\s+/g,
+              '',
+            )
+          }
           const t = norm(text)
           if (!t) return { hit: false, total: 0, tail: [] as string[] }
           const rows = Array.from(

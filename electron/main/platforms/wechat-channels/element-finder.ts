@@ -6,6 +6,7 @@ import {
   type PlatformError,
 } from '#/errors/PlatformError'
 import electronLog from '#/logger'
+import { hasEmojiShortcode, normalizeCommentText } from '../commentMatch'
 import { commonElementFinder, type IElementFinder, queryAcrossFrames } from '../IElementFinder'
 import { SELECTORS } from './constant'
 
@@ -202,9 +203,16 @@ export const wechatChannelElementFinder: WechatChannelElementFinder = {
     const count = texts.length
     // 必须倒序：新评论追加在列表底部，最后匹配的才是刚进来的那条。
     // 正序会在重复内容时命中更早的同名评论，把 @ 安到别人头上。
+    // 表情短码在 DOM 里是图片，纯文本匹配会落空 → 再去掉短码比一轮
+    // 只在目标确实带短码时才启用，普通评论零额外开销
+    const normTarget = hasEmojiShortcode(target) ? normalizeCommentText(target) : ''
     for (let i = count - 1; i >= 0; i--) {
       const text = texts[i]
-      if (text && (text === target || text.includes(target))) {
+      if (!text) continue
+      if (text === target || text.includes(target)) {
+        return items.nth(i)
+      }
+      if (normTarget.length >= 2 && normalizeCommentText(text).includes(normTarget)) {
         return items.nth(i)
       }
     }

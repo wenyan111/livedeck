@@ -266,7 +266,16 @@ export const kuaishouElementFinder: KuaishouElementFinder = {
         // 注意：本函数会被序列化到页面里执行，不能引用模块作用域的任何变量
         const diag = await frame.evaluate(async (text: string) => {
           const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-          const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, '')
+          // 去掉 [笑哭R] 这类表情短码：平台把它渲染成图片，DOM 文本里没有这串字。
+          // 只在目标确实带短码时才启用，普通评论走原来的纯空白归一化（零额外开销）。
+          const needEmojiStrip = /\[[^[\]]{1,10}\]/.test(text)
+          const norm = (s: string | null | undefined) => {
+            const base = s ?? ''
+            return (needEmojiStrip ? base.replace(/\[[^[\]]{1,10}\]/g, '') : base).replace(
+              /\s+/g,
+              '',
+            )
+          }
           const t = norm(text)
           if (!t) return { found: 0, verified: false, diag: [] as string[] }
 

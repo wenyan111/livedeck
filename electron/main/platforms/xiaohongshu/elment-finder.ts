@@ -2,6 +2,7 @@ import { Result } from '@praha/byethrow'
 import type { ElementHandle, Page } from 'playwright'
 import { ElementDisabledError, ElementNotFoundError } from '#/errors/PlatformError'
 import electronLog from '#/logger'
+import { hasEmojiShortcode, normalizeCommentText } from '../commentMatch'
 import { commonElementFinder, type IElementFinder } from '../IElementFinder'
 import { SELECTORS, TEXTS } from './constant'
 import {
@@ -339,6 +340,14 @@ export const xiaohongshuElementFinder: XiaohongshuElementFinder = {
     const target = (content ?? '').trim()
     if (!target) return null
 
+    // ★ 2026-11-01：小红书把 `[笑哭R]` 这类表情短码**渲染成图片**，DOM 文本里没有这串字，
+    // 纯文本匹配必然落空（连报三次未命中的三条内容全带表情短码）。所以再加一轮
+    // 「去掉表情短码 + 空白」后的匹配。normTarget 为空 = 纯表情评论，无法按文本定位，直接放弃。
+    // 只在目标确实带表情短码时才启用规范化（普通评论零额外开销）
+    const normTarget = hasEmojiShortcode(target) ? normalizeCommentText(target) : ''
+    let scanned = 0
+    const tails: string[] = []
+
     for (const frame of page.frames()) {
       for (const selector of SELECTORS.COMMENT_LIST.ITEM_CANDIDATES) {
         let items: ElementHandle<SVGElement | HTMLElement>[] = []
@@ -348,17 +357,33 @@ export const xiaohongshuElementFinder: XiaohongshuElementFinder = {
           continue
         }
         if (items.length === 0) continue
+        scanned += items.length
         for (let i = items.length - 1; i >= 0; i--) {
           const text = ((await items[i].textContent().catch(() => '')) ?? '').trim()
           if (!text) continue
           if (text.includes(target)) return items[i]
-          // 超长评论在列表里可能被截断成「前半段…」，按前缀再比一次
-          const clipped = text.replace(/[.。…\s]+$/, '').trim()
-          if (clipped.length >= 4 && target.startsWith(clipped)) return items[i]
+          // 去掉表情短码后再比（normTarget 为空时跳过，否则空串包含恒真会 @ 错人）
+          if (normTarget.length >= 2) {
+            const normText = normalizeCommentText(text)
+            if (normText.includes(normTarget)) return items[i]
+            // 超长评论在列表里可能被截断成「前半段…」：规范化后按前缀再比一次
+            if (normText.length >= 4 && normTarget.startsWith(normText)) return items[i]
+          }
+        }
+        if (tails.length < 3) {
+          const t = ((await items[items.length - 1]?.textContent().catch(() => '')) ?? '').trim()
+          if (t) tails.push(t.slice(0, 24))
         }
       }
     }
-    // 找不到：评论已被刷出可见列表（中控台只保留最近若干条）
+    // 找不到：评论已被刷出可见列表（中控台只保留最近若干条），或纯表情无法定位
+    electronLog
+      .scope('真@回复')
+      .warn(
+        `小红书未命中：扫描 ${scanned} 行，末尾 [${tails.join(' | ')}]，目标「${
+          target.length > 24 ? `${target.slice(0, 24)}…` : target
+        }」${normTarget.length < 2 ? '（纯表情评论，无法按文本定位）' : ''}`,
+      )
     return null
   },
 
