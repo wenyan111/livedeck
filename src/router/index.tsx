@@ -1,9 +1,14 @@
-import { createHashRouter } from 'react-router'
+import { createHashRouter, Navigate } from 'react-router'
 import AIChat from '@/pages/AIChat'
 import AutoMessage from '@/pages/AutoMessage'
 import AutoPopUp from '@/pages/AutoPopUp'
 import AutoReply from '@/pages/AutoReply'
 import AutoReplySettings from '@/pages/AutoReply/AutoReplySettings'
+import AIPage from '@/pages/AutoReply/AutoReplySettings/pages/AIPage'
+import FilterPage from '@/pages/AutoReply/AutoReplySettings/pages/FilterPage'
+import KeywordPage from '@/pages/AutoReply/AutoReplySettings/pages/KeywordPage'
+import MentionPage from '@/pages/AutoReply/AutoReplySettings/pages/MentionPage'
+import PlatformPage from '@/pages/AutoReply/AutoReplySettings/pages/PlatformPage'
 import ConfigTransfer from '@/pages/ConfigTransferPage'
 import DataEntry from '@/pages/DataEntry'
 import LiveControl from '@/pages/LiveControl'
@@ -57,6 +62,15 @@ export const router = createHashRouter([
       {
         path: '/auto-reply/settings',
         element: <AutoReplySettings />,
+        // 每个分组是独立页面：一页只做一件事，不再把 9 块内容堆在一起
+        children: [
+          { index: true, element: <Navigate to="keyword" replace /> },
+          { path: 'keyword', element: <KeywordPage /> },
+          { path: 'ai', element: <AIPage /> },
+          { path: 'filter', element: <FilterPage /> },
+          { path: 'mention', element: <MentionPage /> },
+          { path: 'platform', element: <PlatformPage /> },
+        ],
       },
       {
         path: '/red-packet',

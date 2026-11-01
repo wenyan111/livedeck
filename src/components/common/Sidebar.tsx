@@ -264,7 +264,7 @@ export default function Sidebar() {
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
-                            to={`${tab.id}/settings#${child.hash}`}
+                            to={`${tab.id}/settings/${child.hash}`}
                             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
                           >
                             <span className="flex-1 truncate">{child.label}</span>
