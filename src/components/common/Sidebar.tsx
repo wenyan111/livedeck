@@ -215,41 +215,52 @@ export default function Sidebar() {
                             // 卡片式条目：圆角 + 细边框 + 底色，和设置页的卡片同一种语言
                             'group flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors',
                             isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
-                              ? 'border-brand bg-muted text-foreground'
-                              : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                              ? 'border-border bg-muted text-foreground'
+                              : 'border-border/50 bg-card text-muted-foreground hover:border-border hover:bg-accent hover:text-foreground',
                           )
                         }
                       >
-                        {({ isActive }) => (
-                          <>
-                            <span
-                              className={cn(
-                                'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
-                                isActive
-                                  ? 'bg-brand/[0.14] text-brand'
-                                  : 'bg-transparent text-muted-foreground',
+                        {({ isActive }) => {
+                          const groupActive =
+                            isActive ||
+                            Boolean(tab.children && location.pathname.startsWith(`${tab.id}/`))
+                          return (
+                            <>
+                              {groupActive && (
+                                <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-foreground/70" />
                               )}
-                            >
-                              {tab.icon}
-                            </span>
-                            <span
-                              className={cn('flex-1 truncate font-medium', tab.children && 'pr-5')}
-                            >
-                              {tab.name}
-                            </span>
-                            {tab.isRunning ? (
                               <span
-                                className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[hsl(var(--success))]"
-                                title="运行中"
-                              />
-                            ) : tab.hasError ? (
+                                className={cn(
+                                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
+                                  groupActive
+                                    ? 'bg-accent text-foreground'
+                                    : 'bg-transparent text-muted-foreground',
+                                )}
+                              >
+                                {tab.icon}
+                              </span>
                               <span
-                                className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--destructive))]"
-                                title={tab.statusTip ?? '开启失败'}
-                              />
-                            ) : null}
-                          </>
-                        )}
+                                className={cn(
+                                  'flex-1 truncate font-medium',
+                                  tab.children && 'pr-5',
+                                )}
+                              >
+                                {tab.name}
+                              </span>
+                              {tab.isRunning ? (
+                                <span
+                                  className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[hsl(var(--success))]"
+                                  title="运行中"
+                                />
+                              ) : tab.hasError ? (
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--destructive))]"
+                                  title={tab.statusTip ?? '开启失败'}
+                                />
+                              ) : null}
+                            </>
+                          )
+                        }}
                       </NavLink>
                       {tab.children && tab.children.length > 0 && (
                         <button
@@ -268,16 +279,23 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/40 bg-muted/20 p-1.5">
+                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/40 bg-card/60 p-1.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
                             to={`${tab.id}/settings/${child.hash}`}
-                            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                            className={({ isActive }) =>
+                              cn(
+                                'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+                                isActive
+                                  ? 'bg-muted font-medium text-foreground'
+                                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                              )
+                            }
                           >
-                            <span className="flex-1 truncate">{child.label}</span>
+                            <span className="min-w-0 flex-1 truncate">{child.label}</span>
                             {child.badge != null && child.badge !== '' && (
-                              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
+                              <span className="shrink-0 rounded bg-background/70 px-1 py-0.5 text-[11px] tabular-nums text-muted-foreground">
                                 {child.badge}
                               </span>
                             )}
