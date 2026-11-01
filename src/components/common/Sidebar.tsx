@@ -218,8 +218,8 @@ export default function Sidebar() {
                             // 浅色主题里 --card 与 --background 都是纯白，只用 bg-card 等于没底色。
                             // 所以走 secondary（浅灰）+ primary 混合，深浅主题都能拉开层次。
                             isActive || (tab.children && location.pathname.startsWith(`${tab.id}/`))
-                              ? 'border-primary/30 bg-primary/[0.08] text-foreground'
-                              : 'border-border bg-secondary text-muted-foreground hover:border-primary/20 hover:bg-secondary/70 hover:text-foreground',
+                              ? 'border-primary/40 bg-secondary text-foreground'
+                              : 'border-border bg-card text-muted-foreground hover:border-primary/25 hover:bg-secondary/60 hover:text-foreground',
                           )
                         }
                       >
@@ -236,7 +236,7 @@ export default function Sidebar() {
                                 className={cn(
                                   'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
                                   groupActive
-                                    ? 'bg-primary/10 text-foreground'
+                                    ? 'bg-background text-foreground'
                                     : 'bg-transparent text-muted-foreground/80',
                                 )}
                               >
@@ -282,7 +282,7 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border bg-secondary/70 p-1.5">
+                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/70 bg-card p-1.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
@@ -291,8 +291,8 @@ export default function Sidebar() {
                               cn(
                                 'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
                                 isActive
-                                  ? 'bg-primary/[0.08] font-medium text-foreground'
-                                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                                  ? 'bg-secondary font-medium text-foreground'
+                                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                               )
                             }
                           >
