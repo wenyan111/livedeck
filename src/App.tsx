@@ -24,6 +24,7 @@ import { useAutoPopUpStore } from './hooks/useAutoPopUp'
 import { useAutoReply, useAutoReplyStore } from './hooks/useAutoReply'
 import { useChromeConfigStore } from './hooks/useChromeConfig'
 import { useLiveControlStore } from './hooks/useLiveControl'
+import { useLogCollector } from './hooks/useLogs'
 import { useOpenPriceLinkageGlobal } from './hooks/useOpenPriceLinkage'
 import { useOpenPriceScriptStore, useOpenPriceStatusSync } from './hooks/useOpenPriceScript'
 import { markDisconnectedTasks, useQuickStartAutoStart } from './hooks/useQuickStart'
@@ -142,6 +143,8 @@ function App() {
     return () => clearTimeout(timer)
   }, [])
 
+  // 日志收集常驻：面板收起时也要继续累积，否则展开后是空的
+  useLogCollector()
   useGlobalIpcListener()
   // 跨平台开价联动需要在任意页面都能响应，因此挂在这里常驻
   useOpenPriceLinkageGlobal()
