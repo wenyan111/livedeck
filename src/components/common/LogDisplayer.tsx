@@ -49,6 +49,12 @@ export default function LogDisplayer() {
   const [autoScroll, setAutoScroll] = useState(true)
   const [atBottom, setAtBottom] = useState(true)
   const [filter, setFilter] = useState<Filter>('all')
+  // 相对时间每 10 秒刷一次，足够用且不会引起频繁重渲染
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 10_000)
+    return () => clearInterval(timer)
+  }, [])
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   // 事件回调里要读"当前是否在底部"，用 state 会拿到旧闭包，所以同时存一份 ref
@@ -120,8 +126,8 @@ export default function LogDisplayer() {
       {/* 头部：标题 + 开关 */}
       <div className="flex items-center justify-between px-4 pb-1 pt-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-[15px] font-medium">运行日志</h3>
-          <span className="text-[13px] text-muted-foreground">{logMessages.length} 条</span>
+          <h3 className="text-[16px] font-medium">运行日志</h3>
+          <span className="text-[14px] text-muted-foreground">{logMessages.length} 条</span>
           {!atBottom && <span className="text-xs text-warning">已暂停跟随</span>}
         </div>
         <div className="flex items-center gap-4">
@@ -166,7 +172,7 @@ export default function LogDisplayer() {
               type="button"
               onClick={() => setFilter(chip.key)}
               className={cn(
-                'rounded-md px-2.5 py-1 text-[13px] transition-colors',
+                'rounded-md px-2.5 py-1 text-[14px] transition-colors',
                 active
                   ? isErrChip
                     ? 'bg-destructive/15 font-medium text-destructive'
@@ -190,7 +196,9 @@ export default function LogDisplayer() {
             {filtered.length === 0 ? (
               <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无日志</p>
             ) : (
-              filtered.map((log, index) => <LogItem key={log.id} log={log} index={index} />)
+              filtered.map((log, index) => (
+                <LogItem key={log.id} log={log} index={index} now={now} />
+              ))
             )}
           </div>
         </ScrollArea>
@@ -212,29 +220,39 @@ export default function LogDisplayer() {
   )
 }
 
-function LogItem({ log, index }: { log: ParsedLog; index: number }) {
+/** 相对时间：直播中看日志最关心「这条是几秒前的」 */
+function relativeTime(at: number, now: number): string {
+  const s = Math.max(0, Math.round((now - at) / 1000))
+  if (s < 5) return '刚刚'
+  if (s < 60) return `${s} 秒前`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} 分前`
+  return `${Math.floor(m / 60)} 小时前`
+}
+
+function LogItem({ log, index, now }: { log: ParsedLog; index: number; now: number }) {
   const error = isError(log)
   // 只显示时分秒（原始 timestamp 是 toLocaleString 的完整日期）
   const time = log.timestamp.split(' ')[1] ?? log.timestamp
   return (
     <div
       className={cn(
-        'flex items-center gap-2 px-4 py-[6px] text-[13px] hover:bg-muted/60',
+        'flex items-center gap-3 px-4 py-1.5 text-[15px] hover:bg-muted/60',
         index % 2 === 1 && 'bg-muted/30',
       )}
     >
-      <span className="w-[64px] shrink-0 tabular-nums text-[13px] text-muted-foreground">
+      <span className="w-[76px] shrink-0 tabular-nums text-[14px] text-muted-foreground">
         {time}
       </span>
       <span
         className={cn(
-          'w-[68px] shrink-0 rounded px-1.5 py-0.5 text-center font-medium text-[12px]',
+          'w-[78px] shrink-0 rounded px-1.5 py-0.5 text-center font-medium text-[13px]',
           levelStyle(log.level),
         )}
       >
         {log.level}
       </span>
-      <span className="max-w-[200px] shrink-0 truncate rounded bg-muted px-1.5 py-0.5 text-[12px] text-muted-foreground">
+      <span className="max-w-[220px] shrink-0 truncate rounded bg-muted px-2 py-0.5 text-[13px] text-muted-foreground">
         {prettifyModule(log.module)}
       </span>
       <span
@@ -242,6 +260,9 @@ function LogItem({ log, index }: { log: ParsedLog; index: number }) {
         title={log.message}
       >
         {log.message}
+      </span>
+      <span className="w-[64px] shrink-0 text-right text-[13px] tabular-nums text-muted-foreground/60">
+        {relativeTime(log.at, now)}
       </span>
     </div>
   )

@@ -5,7 +5,10 @@ import { useIpcListener } from '@/hooks/useIpc'
 
 export interface ParsedLog {
   id: string
+  /** 本地时间字符串（展示用） */
   timestamp: string
+  /** epoch 毫秒（算「几秒前」用） */
+  at: number
   module: string
   level: string
   message: string
@@ -51,6 +54,7 @@ function parseLogMessage(log: LogMessage): ParsedLog | null {
   return {
     id: crypto.randomUUID(),
     timestamp: log.date.toLocaleString(),
+    at: log.date.getTime(),
     module: log.scope ?? 'App',
     level: typeof log.level === 'string' ? log.level.toUpperCase() : 'INFO',
     // 只保留换行符之前的内容

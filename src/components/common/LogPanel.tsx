@@ -6,7 +6,7 @@ import LogDisplayer from './LogDisplayer'
 
 const MIN_H = 120
 const MAX_H = 460
-const DEFAULT_H = 200
+const DEFAULT_H = 240
 
 /** 日志级别 → 小圆点颜色（收起条上的「最新」用） */
 const LEVEL_DOT: Record<string, string> = {
