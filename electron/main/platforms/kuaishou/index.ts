@@ -1,6 +1,7 @@
 import { Result } from '@praha/byethrow'
 import type { Page } from 'playwright'
 import { ElementContentMismatchedError, PageNotFoundError } from '#/errors/PlatformError'
+import electronLog from '#/logger'
 import type { BrowserSession } from '#/managers/BrowserSessionManager'
 import { sleep } from '#/utils'
 import { comment, connect, ensurePage, getAccountName, getItemFromVirtualScroller } from '../helper'
@@ -102,39 +103,66 @@ export class KuaishouPlatform
         }),
       )
     }
-    await button.value.dispatchEvent('click')
-    // 判断是否会出现 modal
-    const modalNextButton = await this.mainPage
-      .waitForSelector(SELECTORS.goodsItem.POPUP_CONFIRM_BUTTON, {
-        timeout: 500,
-      })
-      .catch(() => null)
-    // 出现了就点击“确定”
-    if (modalNextButton) {
-      await modalNextButton.dispatchEvent('click')
+
+    // 弹出确认框（有时点讲解会弹「确定」）
+    const closeModalIfAny = async () => {
+      const modalNextButton = await this.mainPage
+        ?.waitForSelector(SELECTORS.goodsItem.POPUP_CONFIRM_BUTTON, { timeout: 500 })
+        .catch(() => null)
+      if (modalNextButton) {
+        await modalNextButton.dispatchEvent('click')
+      }
     }
 
-    // 结束讲解 - 需要再次开始讲解
-    if (buttonText === '结束讲解') {
-      // 为了以防万一等待一段时间
-      await sleep(100)
-      // 注意：此时无法使用原先的按钮，需要重新查找
-      const newButton = await elementFinder.getPopUpButtonFromGoodsItem(item.value)
-      if (Result.isFailure(newButton)) {
-        return newButton
-      }
-      const newButtonText = (await newButton.value.textContent())?.trim() ?? ''
-      if (newButtonText !== '开始讲解') {
-        return Result.fail(
-          new ElementContentMismatchedError({
-            current: newButtonText,
-            target: '开始讲解',
-          }),
-        )
-      }
-      newButton.value.dispatchEvent('click')
+    // 状态一：还没在讲解 → 直接点「开始讲解」即可
+    if (buttonText === '开始讲解') {
+      await button.value.dispatchEvent('click')
+      await closeModalIfAny()
+      return Result.succeed()
     }
-    return Result.succeed()
+
+    // 状态二：本来就在讲解中（按钮显示「结束讲解」）
+    // 期望：先取消，再点「开始讲解」重新弹出来（等于刷新卡片）。
+    //
+    // ⚠️ 2026-11-02 修正：原实现只 sleep(100) 就断言「文案必须变成开始讲解」，
+    // 但快手文案切换有延迟，几乎每轮都读到还是「结束讲解」→ 报「元素内容不匹配」，
+    // 而业务上这时商品本来就在讲解中，不该算失败。
+    // 现在：每轮只取消一次（cancelled 标记），然后轮询等文案变成「开始讲解」再点它；
+    // 一轮没成就再试，最多 3 轮。注意外层**不再预先点击**，避免来回切换。
+    let latestText = buttonText
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const deadline = Date.now() + 2000
+      let cancelled = false
+      while (Date.now() < deadline) {
+        // 每次重新查：文案切换后旧句柄会失效
+        const btn = await elementFinder.getPopUpButtonFromGoodsItem(item.value)
+        if (Result.isFailure(btn)) {
+          await sleep(150)
+          continue
+        }
+        latestText = (await btn.value.textContent())?.trim() ?? ''
+        if (latestText === '开始讲解') {
+          await btn.value.dispatchEvent('click')
+          await closeModalIfAny()
+          return Result.succeed()
+        }
+        if (latestText === '结束讲解' && !cancelled) {
+          await btn.value.dispatchEvent('click') // 取消当前讲解
+          await closeModalIfAny()
+          cancelled = true
+        }
+        await sleep(150)
+      }
+      electronLog
+        .scope('快手·自动弹窗')
+        .info(`商品 ${id} 第 ${attempt}/3 轮取消后文案仍为「${latestText || '未知'}」，重试`)
+    }
+    return Result.fail(
+      new ElementContentMismatchedError({
+        current: latestText || '未知',
+        target: '开始讲解',
+      }),
+    )
   }
 
   startCommentListener(onComment: (comment: LiveMessage) => void): void | Promise<void> {

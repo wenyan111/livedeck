@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 // 距离底部多少像素以内算"还在底部"（握手区，避免像素级抖动导致误判）
 const BOTTOM_THRESHOLD = 40
 
-type Filter = 'all' | 'error' | `cat:${string}`
+type Filter = 'all' | 'error' | 'warn' | `cat:${string}`
 
 /** 归到筛选条上的某一类；认不出来的都归「其它」 */
 function categoryOf(log: ParsedLog): string {
@@ -96,9 +96,12 @@ export default function LogDisplayer() {
       counts.set(c, (counts.get(c) ?? 0) + 1)
     }
     const errorCount = logMessages.filter(isError).length
+    const warnCount = logMessages.filter(log => log.level === 'WARN').length
+    // 「失败」「警告」固定出现（哪怕是 0）——0 本身也是有用的信号：说明当前健康
     const chipList: { key: Filter; label: string; count: number }[] = [
       { key: 'all', label: '全部', count: logMessages.length },
-      ...(errorCount > 0 ? [{ key: 'error' as Filter, label: '错误', count: errorCount }] : []),
+      { key: 'error', label: '失败', count: errorCount },
+      { key: 'warn', label: '警告', count: warnCount },
       ...[...counts.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4)
@@ -109,7 +112,9 @@ export default function LogDisplayer() {
         ? logMessages
         : filter === 'error'
           ? logMessages.filter(isError)
-          : logMessages.filter(log => categoryOf(log) === filter.slice(4))
+          : filter === 'warn'
+            ? logMessages.filter(log => log.level === 'WARN')
+            : logMessages.filter(log => categoryOf(log) === filter.slice(4))
     return { chips: chipList, filtered: list }
   }, [logMessages, filter])
 
@@ -165,21 +170,37 @@ export default function LogDisplayer() {
       <div className="flex flex-wrap items-center gap-1 px-4 pb-2">
         {chips.map(chip => {
           const active = filter === chip.key
-          const isErrChip = chip.key === 'error'
+          // 失败=红、警告=黄；计数为 0 时压暗，不抢视线
+          const tone =
+            chip.key === 'error' ? 'destructive' : chip.key === 'warn' ? 'warning' : 'neutral'
+          const zero = chip.count === 0 && chip.key !== 'all'
           return (
             <button
               key={chip.key}
               type="button"
               onClick={() => setFilter(chip.key)}
               className={cn(
-                'rounded-md px-2.5 py-1 text-[14px] transition-colors',
+                'flex items-center rounded-md px-2.5 py-1 text-[14px] transition-colors',
                 active
-                  ? isErrChip
+                  ? tone === 'destructive'
                     ? 'bg-destructive/15 font-medium text-destructive'
-                    : 'bg-muted font-medium text-foreground'
-                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                    : tone === 'warning'
+                      ? 'bg-[hsl(var(--warning))]/15 font-medium text-[hsl(var(--warning))]'
+                      : 'bg-muted font-medium text-foreground'
+                  : zero
+                    ? 'text-muted-foreground/40 hover:bg-muted/40'
+                    : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
               )}
             >
+              {(chip.key === 'error' || chip.key === 'warn') && (
+                <span
+                  className={cn(
+                    'mr-1.5 h-1.5 w-1.5 rounded-full',
+                    chip.key === 'error' ? 'bg-destructive' : 'bg-[hsl(var(--warning))]',
+                    zero && 'opacity-40',
+                  )}
+                />
+              )}
               {chip.label}
               <span className={cn('ml-1 tabular-nums', active ? 'opacity-80' : 'opacity-60')}>
                 {chip.count}

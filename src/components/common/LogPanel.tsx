@@ -57,21 +57,21 @@ export default function LogPanel() {
       <button
         type="button"
         onClick={() => setCollapsed(false)}
-        className="flex h-[54px] w-full shrink-0 items-center gap-3 border-t border-border bg-card px-4 text-left transition-colors hover:bg-muted/50"
+        className="flex h-[60px] w-full shrink-0 items-center gap-3.5 border-t border-border bg-card px-4 text-left transition-colors hover:bg-muted/50"
       >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <Terminal className="h-4 w-4" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <Terminal className="h-[18px] w-[18px]" />
         </span>
-        <span className="shrink-0 text-[15px] font-medium text-foreground">运行日志</span>
+        <span className="shrink-0 text-[17px] font-medium text-foreground">运行日志</span>
 
         {errorCount > 0 && (
-          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive/12 px-2.5 py-1 text-[13px] text-destructive">
+          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive/12 px-2.5 py-1 text-[14px] text-destructive">
             <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
             {errorCount} 条错误
           </span>
         )}
 
-        <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-[15px] text-muted-foreground">
           {latest ? (
             <>
               <span className="text-muted-foreground/60">最新</span>
@@ -91,14 +91,14 @@ export default function LogPanel() {
         </span>
 
         {latest && (
-          <span className="shrink-0 tabular-nums text-[13px] text-muted-foreground/60">
+          <span className="shrink-0 tabular-nums text-[15px] text-muted-foreground/60">
             {latest.timestamp.split(' ')[1] ?? ''}
           </span>
         )}
 
-        <span className="flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1 text-[14px] text-muted-foreground">
           展开
-          <ChevronUp className="h-4 w-4" />
+          <ChevronUp className="h-[18px] w-[18px]" />
         </span>
       </button>
     )
