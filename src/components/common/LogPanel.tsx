@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Terminal } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLogsStore } from '@/hooks/useLogs'
 import { prettifyModule } from '@/lib/logFormat'
 import LogDisplayer from './LogDisplayer'
@@ -24,8 +24,17 @@ export default function LogPanel() {
   const [height, setHeight] = useState(DEFAULT_H)
   const draggingRef = useRef(false)
   const messages = useLogsStore(s => s.messages)
-  const errorCount = useLogsStore(s => s.errorCount)
+  // 收起条上显示"未读错误"，展开看过之后清零（用户 2026-11-02 要求）
+  const errorCount = useLogsStore(s => s.unreadErrorCount)
+  const ackErrors = useLogsStore(s => s.ackErrors)
   const latest = messages[messages.length - 1]
+
+  // 展开即视为已读：列表就在眼前，红点没必要继续亮着；
+  // 展开期间新到的错误也一并清掉（用户 2026-11-02：「我去看了之后就消除」）
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 靠展开状态与条数变化触发
+  useEffect(() => {
+    if (!collapsed) ackErrors()
+  }, [collapsed, messages.length, ackErrors])
 
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {

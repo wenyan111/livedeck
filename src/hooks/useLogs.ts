@@ -20,24 +20,32 @@ const MAX_LOG_MESSAGES = 1200
 
 interface LogsStore {
   messages: ParsedLog[]
-  /** 缓冲区里的错误条数（ERROR + FATAL），收起状态用来提示 */
+  /** 缓冲区里的错误总条数（ERROR + FATAL），筛选条用 */
   errorCount: number
+  /** 还没被"看过"的错误数：收起条上的红点用它，展开看过之后清零 */
+  unreadErrorCount: number
   clear: () => void
   push: (log: ParsedLog) => void
+  /** 标记错误已读（展开面板 / 点「失败」筛选 时调用） */
+  ackErrors: () => void
 }
 
 export const useLogsStore = create<LogsStore>(set => ({
   messages: [],
   errorCount: 0,
-  clear: () => set({ messages: [], errorCount: 0 }),
+  unreadErrorCount: 0,
+  clear: () => set({ messages: [], errorCount: 0, unreadErrorCount: 0 }),
+  ackErrors: () => set({ unreadErrorCount: 0 }),
   push: log =>
     set(state => {
       const next =
         state.messages.length >= MAX_LOG_MESSAGES
           ? [...state.messages.slice(1), log]
           : [...state.messages, log]
+      const isErr = log.level === 'ERROR' || log.level === 'FATAL'
       return {
         messages: next,
+        unreadErrorCount: state.unreadErrorCount + (isErr ? 1 : 0),
         errorCount:
           state.errorCount +
           (log.level === 'ERROR' || log.level === 'FATAL' ? 1 : 0) -

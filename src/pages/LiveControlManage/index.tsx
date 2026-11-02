@@ -1,6 +1,7 @@
 import { useMemoizedFn } from 'ahooks'
 import { Reorder, useDragControls } from 'framer-motion'
 import {
+  AlertTriangle,
   GripVertical,
   Loader2,
   MonitorSmartphone,
@@ -539,6 +540,15 @@ export default function LiveControlManage() {
   return (
     <div className="container space-y-4 py-8">
       <Title title="中控台管理" description="勾选账号，一次性连接或断开多个中控台" />
+
+      {/* 2026-11-02 用户要求加的提醒：提前连接会在开播前就建立监听，容易漏掉开播瞬间的评论 */}
+      <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[hsl(var(--warning))]" />
+        <span>
+          建议<b className="mx-0.5 text-foreground/80">全部平台都确认开播后</b>
+          再点「一键连接」——提前连接会在开播前建立监听，容易漏掉开播瞬间的评论。
+        </span>
+      </p>
 
       <Card>
         <CardHeader>
