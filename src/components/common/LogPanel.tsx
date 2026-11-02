@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Terminal } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
 import { useLogsStore } from '@/hooks/useLogs'
+import { prettifyModule } from '@/lib/logFormat'
 import LogDisplayer from './LogDisplayer'
 
 const MIN_H = 120
@@ -56,31 +57,32 @@ export default function LogPanel() {
       <button
         type="button"
         onClick={() => setCollapsed(false)}
-        className="flex h-12 w-full shrink-0 items-center gap-3 border-t border-border bg-card px-4 text-left transition-colors hover:bg-muted/50"
+        className="flex h-[54px] w-full shrink-0 items-center gap-3 border-t border-border bg-card px-4 text-left transition-colors hover:bg-muted/50"
       >
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
-          <Terminal className="h-3.5 w-3.5" />
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <Terminal className="h-4 w-4" />
         </span>
-        <span className="shrink-0 text-sm font-medium text-foreground">运行日志</span>
+        <span className="shrink-0 text-[15px] font-medium text-foreground">运行日志</span>
 
         {errorCount > 0 && (
-          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
+          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive/12 px-2.5 py-1 text-[13px] text-destructive">
             <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
             {errorCount} 条错误
           </span>
         )}
 
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
           {latest ? (
             <>
-              <span className="text-muted-foreground/70">最新：</span>
+              <span className="text-muted-foreground/60">最新</span>
+              <span className="mx-1.5 text-muted-foreground/40">|</span>
               <span
-                className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${
+                className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${
                   LEVEL_DOT[latest.level] ?? 'bg-muted-foreground/40'
                 }`}
               />
-              <span className="text-foreground/70">{latest.module}</span>
-              <span className="mx-1 text-muted-foreground/50">·</span>
+              <span className="text-foreground/80">{prettifyModule(latest.module)}</span>
+              <span className="mx-1.5 text-muted-foreground/40">·</span>
               {latest.message}
             </>
           ) : (
@@ -88,7 +90,13 @@ export default function LogPanel() {
           )}
         </span>
 
-        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+        {latest && (
+          <span className="shrink-0 tabular-nums text-[13px] text-muted-foreground/60">
+            {latest.timestamp.split(' ')[1] ?? ''}
+          </span>
+        )}
+
+        <span className="flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground">
           展开
           <ChevronUp className="h-4 w-4" />
         </span>
