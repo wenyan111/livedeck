@@ -131,8 +131,8 @@ export default function LogDisplayer() {
       {/* 头部：标题 + 开关 */}
       <div className="flex items-center justify-between px-4 pb-1 pt-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-[16px] font-medium">运行日志</h3>
-          <span className="text-[14px] text-muted-foreground">{logMessages.length} 条</span>
+          <h3 className="text-[14.5px] font-medium">运行日志</h3>
+          <span className="text-[12.5px] text-muted-foreground">{logMessages.length} 条</span>
           {!atBottom && <span className="text-xs text-warning">已暂停跟随</span>}
         </div>
         <div className="flex items-center gap-4">
@@ -180,7 +180,7 @@ export default function LogDisplayer() {
               type="button"
               onClick={() => setFilter(chip.key)}
               className={cn(
-                'flex items-center rounded-md px-2.5 py-1 text-[14px] transition-colors',
+                'flex items-center rounded-md px-2 py-0.5 text-[13px] transition-colors',
                 active
                   ? tone === 'destructive'
                     ? 'bg-destructive/15 font-medium text-destructive'
@@ -258,22 +258,22 @@ function LogItem({ log, index, now }: { log: ParsedLog; index: number; now: numb
   return (
     <div
       className={cn(
-        'flex items-center gap-3 px-4 py-1.5 text-[15px] hover:bg-muted/60',
+        'flex items-center gap-3 px-4 py-1 text-[13.5px] hover:bg-muted/60',
         index % 2 === 1 && 'bg-muted/30',
       )}
     >
-      <span className="w-[76px] shrink-0 tabular-nums text-[14px] text-muted-foreground">
+      <span className="w-[68px] shrink-0 tabular-nums text-[12.5px] text-muted-foreground">
         {time}
       </span>
       <span
         className={cn(
-          'w-[78px] shrink-0 rounded px-1.5 py-0.5 text-center font-medium text-[13px]',
+          'w-[70px] shrink-0 rounded px-1.5 py-0.5 text-center font-medium text-[12px]',
           levelStyle(log.level),
         )}
       >
         {log.level}
       </span>
-      <span className="max-w-[220px] shrink-0 truncate rounded bg-muted px-2 py-0.5 text-[13px] text-muted-foreground">
+      <span className="max-w-[200px] shrink-0 truncate rounded bg-muted px-1.5 py-0.5 text-[12px] text-muted-foreground">
         {prettifyModule(log.module)}
       </span>
       <span
@@ -282,7 +282,7 @@ function LogItem({ log, index, now }: { log: ParsedLog; index: number; now: numb
       >
         {log.message}
       </span>
-      <span className="w-[64px] shrink-0 text-right text-[13px] tabular-nums text-muted-foreground/60">
+      <span className="w-[58px] shrink-0 text-right text-[12px] tabular-nums text-muted-foreground/60">
         {relativeTime(log.at, now)}
       </span>
     </div>
