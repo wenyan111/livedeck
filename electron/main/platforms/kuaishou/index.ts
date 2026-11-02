@@ -116,7 +116,8 @@ export class KuaishouPlatform
 
     // 状态一：还没在讲解 → 直接点「开始讲解」即可
     if (buttonText === '开始讲解') {
-      await button.value.dispatchEvent('click')
+      // 真实点击优先（合成 click 对部分元素不生效）
+      await button.value.click({ force: true }).catch(() => button.value.dispatchEvent('click'))
       await closeModalIfAny()
       return Result.succeed()
     }
@@ -127,35 +128,44 @@ export class KuaishouPlatform
     // ⚠️ 2026-11-02 修正：原实现只 sleep(100) 就断言「文案必须变成开始讲解」，
     // 但快手文案切换有延迟，几乎每轮都读到还是「结束讲解」→ 报「元素内容不匹配」，
     // 而业务上这时商品本来就在讲解中，不该算失败。
-    // 现在：每轮只取消一次（cancelled 标记），然后轮询等文案变成「开始讲解」再点它；
+    // 现在：每轮只点一次取消（clicked 标记），然后轮询等文案变成「开始讲解」再点它；
     // 一轮没成就再试，最多 3 轮。注意外层**不再预先点击**，避免来回切换。
     let latestText = buttonText
     for (let attempt = 1; attempt <= 3; attempt++) {
       const deadline = Date.now() + 2000
-      let cancelled = false
+      let clicked = false
       while (Date.now() < deadline) {
-        // 每次重新查：文案切换后旧句柄会失效
-        const btn = await elementFinder.getPopUpButtonFromGoodsItem(item.value)
+        // ★ 每轮都重新拿 item：点击后这一行会被重渲染，旧的 ElementHandle 会失效，
+        //   从失效句柄里查按钮读到的永远是旧文案（2026-11-02 实测：三轮都停在「结束讲解」）。
+        const fresh = await getItemFromVirtualScroller(this.mainPage, elementFinder, id)
+        if (Result.isFailure(fresh)) {
+          await sleep(150)
+          continue
+        }
+        const btn = await elementFinder.getPopUpButtonFromGoodsItem(fresh.value)
         if (Result.isFailure(btn)) {
           await sleep(150)
           continue
         }
         latestText = (await btn.value.textContent())?.trim() ?? ''
+
         if (latestText === '开始讲解') {
-          await btn.value.dispatchEvent('click')
+          // 用真实点击；合成 click 对某些元素不生效，失败再退回 dispatchEvent
+          await btn.value.click({ force: true }).catch(() => btn.value.dispatchEvent('click'))
           await closeModalIfAny()
           return Result.succeed()
         }
-        if (latestText === '结束讲解' && !cancelled) {
-          await btn.value.dispatchEvent('click') // 取消当前讲解
+
+        if (latestText === '结束讲解' && !clicked) {
+          await btn.value.click({ force: true }).catch(() => btn.value.dispatchEvent('click'))
           await closeModalIfAny()
-          cancelled = true
+          clicked = true
         }
-        await sleep(150)
+        await sleep(200)
       }
       electronLog
         .scope('快手·自动弹窗')
-        .info(`商品 ${id} 第 ${attempt}/3 轮取消后文案仍为「${latestText || '未知'}」，重试`)
+        .info(`商品 ${id} 第 ${attempt}/3 轮点击后文案仍为「${latestText || '未知'}」，重试`)
     }
     return Result.fail(
       new ElementContentMismatchedError({
