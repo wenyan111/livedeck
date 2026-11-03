@@ -83,10 +83,11 @@ export class KuaishouPlatform
   }
 
   async performPopup(id: number) {
-    if (!this.mainPage) {
+    const page = this.mainPage
+    if (!page) {
       return Result.fail(new PageNotFoundError())
     }
-    const item = await getItemFromVirtualScroller(this.mainPage, elementFinder, id)
+    const item = await getItemFromVirtualScroller(page, elementFinder, id)
     if (Result.isFailure(item)) {
       return item
     }
@@ -106,60 +107,91 @@ export class KuaishouPlatform
 
     // 弹出确认框（有时点讲解会弹「确定」）
     const closeModalIfAny = async () => {
-      const modalNextButton = await this.mainPage
-        ?.waitForSelector(SELECTORS.goodsItem.POPUP_CONFIRM_BUTTON, { timeout: 500 })
+      const modalNextButton = await page
+        .waitForSelector(SELECTORS.goodsItem.POPUP_CONFIRM_BUTTON, { timeout: 500 })
         .catch(() => null)
       if (modalNextButton) {
         await modalNextButton.dispatchEvent('click')
       }
     }
 
-    // 状态一：还没在讲解 → 直接点「开始讲解」即可
+    // 读当前按钮文案（每次都重新取商品行：点击后行会重渲染，旧句柄失效会一直读到旧文案）
+    const readButtonText = async () => {
+      const fresh = await getItemFromVirtualScroller(page, elementFinder, id)
+      if (Result.isFailure(fresh)) return null
+      const btn = await elementFinder.getPopUpButtonFromGoodsItem(fresh.value)
+      if (Result.isFailure(btn)) return null
+      return { btn: btn.value, text: (await btn.value.textContent())?.trim() ?? '' }
+    }
+
+    /**
+     * 点「开始讲解」并**确认真的开始了**（文案变成「结束讲解」）。
+     *
+     * ⚠️ 2026-11-04：原来点完直接返回成功，但快手有时点击会落空（实测 06:49 报成功、
+     * 07:01 页面上按钮仍是「开始讲解」），等于谎报成功，用户以为讲上了其实没讲。
+     * 现在最多 3 轮：点击 → 轮询 2 秒等文案翻转；没翻转就重来。
+     */
+    const startAndVerify = async (): Promise<boolean> => {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const current = await readButtonText()
+        if (!current) {
+          await sleep(200)
+          continue
+        }
+        if (current.text === '结束讲解') return true // 已经在讲
+
+        await current.btn.click({ force: true }).catch(() => current.btn.dispatchEvent('click'))
+        await closeModalIfAny()
+
+        // 等文案翻转
+        const deadline = Date.now() + 2000
+        while (Date.now() < deadline) {
+          await sleep(200)
+          const after = await readButtonText()
+          if (after?.text === '结束讲解') return true
+        }
+        electronLog
+          .scope('快手·自动弹窗')
+          .info(`商品 ${id} 第 ${attempt}/3 轮点开始讲解后文案未翻转，重试`)
+      }
+      return false
+    }
+
+    // 状态一：还没在讲解 → 点开始并验证
     if (buttonText === '开始讲解') {
-      // 真实点击优先（合成 click 对部分元素不生效）
-      await button.value.click({ force: true }).catch(() => button.value.dispatchEvent('click'))
-      await closeModalIfAny()
-      return Result.succeed()
+      if (await startAndVerify()) return Result.succeed()
+      const last = await readButtonText()
+      return Result.fail(
+        new ElementContentMismatchedError({
+          current: last?.text || '未知',
+          target: '结束讲解',
+        }),
+      )
     }
 
     // 状态二：本来就在讲解中（按钮显示「结束讲解」）
     // 期望：先取消，再点「开始讲解」重新弹出来（等于刷新卡片）。
-    //
-    // ⚠️ 2026-11-02 修正：原实现只 sleep(100) 就断言「文案必须变成开始讲解」，
-    // 但快手文案切换有延迟，几乎每轮都读到还是「结束讲解」→ 报「元素内容不匹配」，
-    // 而业务上这时商品本来就在讲解中，不该算失败。
-    // 现在：每轮只点一次取消（clicked 标记），然后轮询等文案变成「开始讲解」再点它；
-    // 一轮没成就再试，最多 3 轮。注意外层**不再预先点击**，避免来回切换。
+    // 每轮只取消一次（clicked 标记），然后轮询等文案变成「开始讲解」再点它；最多 3 轮。
     let latestText = buttonText
     for (let attempt = 1; attempt <= 3; attempt++) {
       const deadline = Date.now() + 2000
-      let clicked = false
+      let cancelled = false
       while (Date.now() < deadline) {
-        // ★ 每轮都重新拿 item：点击后这一行会被重渲染，旧的 ElementHandle 会失效，
-        //   从失效句柄里查按钮读到的永远是旧文案（2026-11-02 实测：三轮都停在「结束讲解」）。
-        const fresh = await getItemFromVirtualScroller(this.mainPage, elementFinder, id)
-        if (Result.isFailure(fresh)) {
+        const current = await readButtonText()
+        if (!current) {
           await sleep(150)
           continue
         }
-        const btn = await elementFinder.getPopUpButtonFromGoodsItem(fresh.value)
-        if (Result.isFailure(btn)) {
-          await sleep(150)
-          continue
-        }
-        latestText = (await btn.value.textContent())?.trim() ?? ''
-
+        latestText = current.text
         if (latestText === '开始讲解') {
-          // 用真实点击；合成 click 对某些元素不生效，失败再退回 dispatchEvent
-          await btn.value.click({ force: true }).catch(() => btn.value.dispatchEvent('click'))
-          await closeModalIfAny()
-          return Result.succeed()
+          // 已取消 → 交给 startAndVerify 点开始并确认
+          if (await startAndVerify()) return Result.succeed()
+          break
         }
-
-        if (latestText === '结束讲解' && !clicked) {
-          await btn.value.click({ force: true }).catch(() => btn.value.dispatchEvent('click'))
+        if (latestText === '结束讲解' && !cancelled) {
+          await current.btn.click({ force: true }).catch(() => current.btn.dispatchEvent('click')) // 取消当前讲解
           await closeModalIfAny()
-          clicked = true
+          cancelled = true
         }
         await sleep(200)
       }
