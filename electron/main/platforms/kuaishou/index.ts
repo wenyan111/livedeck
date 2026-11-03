@@ -105,14 +105,68 @@ export class KuaishouPlatform
       )
     }
 
-    // 弹出确认框（有时点讲解会弹「确定」）
-    const closeModalIfAny = async () => {
-      const modalNextButton = await page
-        .waitForSelector(SELECTORS.goodsItem.POPUP_CONFIRM_BUTTON, { timeout: 500 })
-        .catch(() => null)
-      if (modalNextButton) {
-        await modalNextButton.dispatchEvent('click')
+    /**
+     * 点击后可能出现两种确认层，都要关掉，否则状态不会推进：
+     *  ① 「确定结束当前讲解?」——**快手专有**，点「结束讲解」必弹，含「覆盖当前讲解」勾选框，
+     *     不点「确定」就一直是结束讲解状态（2026-11-04 用户确认：这点和抖音不一样）
+     *  ② 点「开始讲解」偶尔弹的普通确认框（POPUP_CONFIRM_BUTTON）
+     *
+     * ⚠️ 原来只按 `.ant-modal-root button:last-child` 点一下，但 AntD 的 footer 里
+     * 第一个匹配到的是「取消」——点错按钮等于什么也没做。
+     * 现在改成按文字找「确定/确认」，并且限定在可见弹层内。
+     */
+    const confirmIfAny = async () => {
+      // 先等弹层出现（最多 800ms），没出现就直接返回，避免每次都白等
+      const appearDeadline = Date.now() + 800
+      let hasModal = false
+      while (Date.now() < appearDeadline) {
+        hasModal = await page
+          .evaluate(
+            () =>
+              !!Array.from(document.querySelectorAll('.ant-modal-root, [role="dialog"]')).find(
+                el => {
+                  const rect = el.getBoundingClientRect()
+                  return rect.width > 0 && rect.height > 0
+                },
+              ),
+          )
+          .catch(() => false)
+        if (hasModal) break
+        await sleep(100)
       }
+      if (!hasModal) return
+
+      // 在可见弹层里按文字点「确定」/「确认」
+      const clickDeadline = Date.now() + 1500
+      while (Date.now() < clickDeadline) {
+        const clicked = await page
+          .evaluate(() => {
+            const dialogs = Array.from(
+              document.querySelectorAll<HTMLElement>('.ant-modal-root, [role="dialog"]'),
+            ).filter(el => {
+              const rect = el.getBoundingClientRect()
+              return rect.width > 0 && rect.height > 0
+            })
+            const scope: ParentNode = dialogs[0] ?? document
+            const buttons = Array.from(scope.querySelectorAll<HTMLElement>('button'))
+            const ok = buttons.find(b => {
+              const text = (b.textContent ?? '').trim()
+              const rect = b.getBoundingClientRect()
+              return (text === '确定' || text === '确认') && rect.width > 0 && rect.height > 0
+            })
+            if (!ok) return false
+            ok.click()
+            return true
+          })
+          .catch(() => false)
+        if (clicked) {
+          electronLog.scope('快手·自动弹窗').info('已点击确认弹层')
+          await sleep(150)
+          return
+        }
+        await sleep(150)
+      }
+      electronLog.scope('快手·自动弹窗').warn('弹层出现了但没找到「确定」按钮')
     }
 
     // 读当前按钮文案（每次都重新取商品行：点击后行会重渲染，旧句柄失效会一直读到旧文案）
@@ -141,7 +195,7 @@ export class KuaishouPlatform
         if (current.text === '结束讲解') return true // 已经在讲
 
         await current.btn.click({ force: true }).catch(() => current.btn.dispatchEvent('click'))
-        await closeModalIfAny()
+        await confirmIfAny()
 
         // 等文案翻转
         const deadline = Date.now() + 2000
@@ -190,7 +244,7 @@ export class KuaishouPlatform
         }
         if (latestText === '结束讲解' && !cancelled) {
           await current.btn.click({ force: true }).catch(() => current.btn.dispatchEvent('click')) // 取消当前讲解
-          await closeModalIfAny()
+          await confirmIfAny()
           cancelled = true
         }
         await sleep(200)
