@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app } from 'electron'
-import { type LedgerRecord, mergeLedgerRecords } from 'shared/dataEntryLedger'
+import { type LedgerRecord, mergeLedgerRecords, newLedgerId } from 'shared/dataEntryLedger'
 import { createLogger } from '#/logger'
 
 const FILE_NAME = 'liveReportLedger.json'
@@ -25,15 +25,32 @@ export class LiveReportLedgerService {
     try {
       const raw = await fs.readFile(this.filePath, 'utf-8')
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        return (parsed as LedgerRecord[]).map(r => ({
+      if (!Array.isArray(parsed)) return []
+      const seen = new Set<string>()
+      let repaired = 0
+      const records = (parsed as LedgerRecord[]).map(r => {
+        let id = r.id
+        // 老数据可能两条记录共用一个 id（借用行 id 造成的），
+        // 这会让「改一格」同时改到两行 —— 读到时就地修好并回写。
+        if (!id || seen.has(id)) {
+          id = newLedgerId()
+          repaired++
+        }
+        seen.add(id)
+        return {
           ...r,
+          id,
           platform: (r.platform ?? 'douyin') as LiveControlPlatform,
           values: r.values ?? {},
           createdAt: r.createdAt ?? Date.now(),
           updatedAt: r.updatedAt ?? r.createdAt ?? Date.now(),
-        }))
+        }
+      })
+      if (repaired > 0) {
+        this.logger.warn(`总表里有 ${repaired} 条记录 id 重复，已重新分配并回写`)
+        await this.saveAll(records)
       }
+      return records
     } catch {
       // 文件不存在或损坏 → 空表
     }

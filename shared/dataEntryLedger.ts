@@ -33,6 +33,20 @@ export function ledgerKeyOf(sectionKey: string, values: Record<string, string>):
   return `${sectionKey}|${date}|${session}`
 }
 
+/**
+ * 生成一条总表记录的唯一 id。
+ *
+ * 事故（2026-11-05，用户报「改一行两行一起变」）：
+ * 原来直接借用录入页那一行的 id，可一旦这行的日期/场次改过，
+ * 会同时存在「旧 key 的记录」和「新 key 的记录」，两者 id 相同 →
+ * 按 id 改单元格时两行一起变。所以 id 必须独立生成，绝不复用行 id。
+ */
+export function newLedgerId(): string {
+  const c = globalThis.crypto as Crypto | undefined
+  if (c?.randomUUID) return c.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 /** 这一行是否值得归档（全是空行就不进总表） */
 export function hasAnyValue(values: Record<string, string>): boolean {
   return Object.values(values).some(v => (v ?? '').trim() !== '')

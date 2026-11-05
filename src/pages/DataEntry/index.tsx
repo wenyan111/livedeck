@@ -14,7 +14,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { buildLedgerColumns, hasAnyValue, type LedgerRecord } from 'shared/dataEntryLedger'
+import {
+  buildLedgerColumns,
+  hasAnyValue,
+  type LedgerRecord,
+  ledgerKeyOf,
+  newLedgerId,
+} from 'shared/dataEntryLedger'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import {
@@ -840,6 +846,20 @@ export default function DataEntry() {
     },
     [persistNotes],
   )
+  /** 直接改某一条规则（用户 2026-11-05：这里要能改，不用删了重写） */
+  const updateSectionNote = useCallback(
+    (key: string, index: number, text: string) => {
+      setSectionNotes(prev => {
+        const list = [...(prev[key] ?? [])]
+        if (index < 0 || index >= list.length) return prev
+        list[index] = text
+        const next = { ...prev, [key]: list }
+        persistNotes(next)
+        return next
+      })
+    },
+    [persistNotes],
+  )
 
   /**
    * 板块自定义名称（板块标题可以直接改，存 localStorage）。
@@ -1294,7 +1314,8 @@ export default function DataEntry() {
       const records: LedgerRecord[] = rows
         .filter(r => hasAnyValue(r.values))
         .map(r => ({
-          id: r.id,
+          // id 必须是总表自己的（不能借用行 id，否则改过日期/场次的行会撞 id）
+          id: newLedgerId(),
           sectionKey: r.platform as string,
           sectionName: sectionLabel(r.platform as string),
           platform: r.platform,
@@ -1326,16 +1347,35 @@ export default function DataEntry() {
     })
   }, [ledger, ledgerFilter])
 
-  /** 总表里直接改一个格子 */
-  const updateLedgerCell = useCallback((id: string, key: string, value: string) => {
-    setLedger(prev => {
-      const next = prev.map(r =>
+  /**
+   * 总表里直接改一个格子。
+   * 改完同时回写到录入页里同一条记录对应的那一行，
+   * 否则下次从录入页归档时会把旧的（改之前的）值覆盖回来。
+   */
+  const updateLedgerCell = useCallback(
+    (id: string, key: string, value: string) => {
+      const target = ledger.find(r => r.id === id)
+      if (!target) return
+      const next = ledger.map(r =>
         r.id === id ? { ...r, values: { ...r.values, [key]: value }, updatedAt: Date.now() } : r,
       )
+      setLedger(next)
       window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveLedger, next).catch(() => {})
-      return next
-    })
-  }, [])
+
+      // 找录入页里「同板块 + 同日期场次」的那一行同步过去
+      if (rows.some(r => (r.platform as string) === target.sectionKey)) {
+        const targetKey = ledgerKeyOf(target.sectionKey, target.values)
+        setRows(prev =>
+          prev.map(r => {
+            if ((r.platform as string) !== target.sectionKey) return r
+            if (ledgerKeyOf(target.sectionKey, r.values) !== targetKey) return r
+            return { ...r, values: { ...r.values, [key]: value } }
+          }),
+        )
+      }
+    },
+    [ledger, rows],
+  )
 
   /** 总表里删掉一行（只删总表记录，不影响录入页的行） */
   const removeLedgerRow = useCallback((id: string) => {
@@ -1749,7 +1789,13 @@ export default function DataEntry() {
                           <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 font-medium text-primary">
                             你
                           </span>
-                          <span className="flex-1 leading-relaxed text-foreground/85">{note}</span>
+                          {/* 规则本身也能直接改：点进去改完就生效（存本地） */}
+                          <input
+                            value={note}
+                            onChange={e => updateSectionNote(pf, i, e.target.value)}
+                            className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-relaxed text-foreground/85 outline-none hover:border-border focus:border-primary focus:bg-background"
+                            title="点这里可以直接修改这条规则"
+                          />
                           <button
                             type="button"
                             onClick={() => removeSectionNote(pf, i)}
@@ -1761,7 +1807,8 @@ export default function DataEntry() {
                         </div>
                       ))}
                       <p className="pl-1 text-[10px] text-muted-foreground">
-                        已记住 {(sectionNotes[pf] ?? []).length} 条，每次识别都会带上；点 × 可以删掉
+                        已记住 {(sectionNotes[pf] ?? []).length}{' '}
+                        条，每次识别都会带上；点文字可直接改，× 删掉
                       </p>
                     </div>
                   )}

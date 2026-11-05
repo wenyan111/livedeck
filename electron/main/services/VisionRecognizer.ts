@@ -464,8 +464,15 @@ function extractKeyValuePairs(text: string): Record<string, unknown> | null {
 /** 单批最大图片数（视觉模型限制） */
 const MAX_IMAGES_PER_BATCH = 4
 
-/** 每块请求的字段数——字段越少模型越专注，准确率越高 */
-const FIELDS_PER_CHUNK = 10
+/**
+ * 每块请求的字段数。
+ *
+ * 字段越少模型越专注，但**同一批图片会被每个字段块重复送一遍**，
+ * 所以块数直接乘在输入 token 上：45 个字段按 10 切 = 5 块 = 一张图送 5 次。
+ * 实测 10 个字段一块时，模型解析出来的键数就是 10（没漏），说明 15 个也扛得住，
+ * 于是折中到 15：45 字段从 5 块降到 3 块，输入 token 省约 40%，速度也更快。
+ */
+const FIELDS_PER_CHUNK = 15
 
 /** 把数组按 size 切块 */
 function chunk<T>(arr: T[], size: number): T[][] {
