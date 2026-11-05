@@ -51,6 +51,19 @@ import {
 import { useAIProvider } from '@/hooks/useAIProvider'
 import { useToast } from '@/hooks/useToast'
 
+/**
+ * 火山方舟常用视觉模型——只是**一键填入**的快捷项，不是白名单：
+ * 模型那栏仍然可以手填任意模型 ID，或者你控制台里创建的接入点 `ep-xxxxxxxx`。
+ *
+ * 价格（2026-11 官方价，元/百万 tokens）：pro 输入 6 / 输出 30；turbo 约一半；lite 约 1/7。
+ * 识别这种「照抄数字」的活，turbo 通常够用；lite 在模糊小字上容易读错。
+ */
+const VOLC_VISION_MODELS = [
+  { id: 'doubao-seed-2-1-pro-260915', name: 'Seed 2.1 pro', note: '最强，价格基准' },
+  { id: 'doubao-seed-2-1-turbo-260628', name: 'Seed 2.1 turbo', note: '同代、约半价、更快' },
+  { id: 'doubao-seed-2-0-lite-260428', name: 'Seed 2.0 lite', note: '最便宜、小字易错' },
+]
+
 interface LocalImage {
   id: string
   url: string
@@ -2332,11 +2345,49 @@ export default function DataEntry() {
                 </SelectContent>
               </Select>
             ) : (
-              <Input
-                value={config.model}
-                onChange={e => setConfig({ model: e.target.value })}
-                placeholder="如 glm-4v-plus"
-              />
+              <div className="space-y-1">
+                <Input
+                  value={config.model}
+                  onChange={e => setConfig({ model: e.target.value })}
+                  list={config.provider === 'volcengine' ? 'vision-model-suggest' : undefined}
+                  placeholder={
+                    config.provider === 'volcengine'
+                      ? '模型 ID（如 doubao-seed-2-1-pro-260915）或接入点 ep-xxx'
+                      : '如 glm-4v-plus'
+                  }
+                />
+                {config.provider === 'volcengine' && (
+                  <>
+                    <datalist id="vision-model-suggest">
+                      {VOLC_VISION_MODELS.map(m => (
+                        <option key={m.id} value={m.id} />
+                      ))}
+                    </datalist>
+                    {/* 一键切常用型号；也可以直接在上面填自己控制台的接入点 ep-xxx */}
+                    <div className="flex flex-wrap gap-1">
+                      {VOLC_VISION_MODELS.map(m => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setConfig({ model: m.id })}
+                          className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
+                            config.model === m.id
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border text-muted-foreground hover:border-primary/50'
+                          }`}
+                          title={`${m.id} — ${m.note}`}
+                        >
+                          {m.name}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      直连模型 ID 需先在方舟「开通」该模型；也可以在方舟控制台建一个接入点，把那串
+                      <code className="px-0.5">ep-xxxxxxxx</code> 填到上面。
+                    </p>
+                  </>
+                )}
+              </div>
             )}
           </div>
 
