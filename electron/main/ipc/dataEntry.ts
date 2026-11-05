@@ -1,21 +1,32 @@
 import { dialog } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
-import { typedIpcMainHandle } from '#/utils'
-import { VisionRecognizer } from '#/services/VisionRecognizer'
-import { tableFileService } from '#/services/TableFileService'
-import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
-import { visionTemplateService } from '#/services/VisionTemplateService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
+import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
+import { tableFileService } from '#/services/TableFileService'
+import { VisionRecognizer } from '#/services/VisionRecognizer'
+import { visionTemplateService } from '#/services/VisionTemplateService'
+import { typedIpcMainHandle } from '#/utils'
 
 const visionRecognizer = new VisionRecognizer()
 
 function setupIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.recognize, async (_, params) => {
     // 如果请求使用模板，加载已保存的模板
-    const template = params.templateId === 'use-saved'
-      ? await visionTemplateService.loadTemplate()
-      : null
-    return await visionRecognizer.recognize(params.images, params.config, params.columns, template ?? undefined)
+    const template =
+      params.templateId === 'use-saved' ? await visionTemplateService.loadTemplate() : null
+    return await visionRecognizer.recognize(
+      params.images,
+      params.config,
+      params.columns,
+      template ?? undefined,
+      params.runId,
+    )
+  })
+
+  // 暂停识别：在两次模型调用之间停下，已完成的结果照常返回给页面
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.pauseRecognize, async (_, params) => {
+    visionRecognizer.requestPause(params?.runId)
+    return true
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.selectOutputPath, async () => {

@@ -1,7 +1,11 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import OpenAI from 'openai'
-import { LIVE_REPORT_COLUMNS, computeDerivedValues, type LiveReportColumn } from 'shared/liveReportColumns'
+import {
+  computeDerivedValues,
+  LIVE_REPORT_COLUMNS,
+  type LiveReportColumn,
+} from 'shared/liveReportColumns'
 import { createLogger } from '#/logger'
 import { providerService } from '#/services/ProviderService'
 
@@ -24,6 +28,16 @@ export interface VisionResult {
   values: Record<string, string>
   /** 低置信列 key（非文本列却不是数字，疑似识别错误） */
   lowConfidence: string[]
+  /**
+   * 本次是否被「暂停识别」提前结束。
+   * 为 true 时 values 是已经跑完的那些调用的结果，仍然有效。
+   */
+  paused?: boolean
+  /**
+   * 已经**完整**识别过的图片在入参 images 里的下标。
+   * 渲染进程据此把这些图标记为「已识别」，下次不再重复送模型。
+   */
+  processedImageIndexes?: number[]
 }
 
 // ──────────────────────────────────────────────
@@ -32,22 +46,22 @@ export interface VisionResult {
 
 /** 单个字段在标准截图中的位置（归一化坐标 0~1） */
 export interface FieldLocation {
-  key: string       // 字段 key，如 "viewersWan"
-  label: string     // 字段中文标签
-  x: number         // 左上角 x (0~1)
-  y: number         // 左上角 y (0~1)
-  w: number         // 宽度 (0~1)
-  h: number         // 高度 (0~1)
+  key: string // 字段 key，如 "viewersWan"
+  label: string // 字段中文标签
+  x: number // 左上角 x (0~1)
+  y: number // 左上角 y (0~1)
+  w: number // 宽度 (0~1)
+  h: number // 高度 (0~1)
 }
 
 /** 一套完整的视觉模板 */
 export interface VisionTemplate {
-  id: string                    // 唯一 ID
-  name: string                  // 如 "抖音大屏-晚场"
-  imageBase64: string           // 标准截图 dataURL
-  fields: FieldLocation[]       // 所有字段的位置
+  id: string // 唯一 ID
+  name: string // 如 "抖音大屏-晚场"
+  imageBase64: string // 标准截图 dataURL
+  fields: FieldLocation[] // 所有字段的位置
   sampleValues?: Record<string, string> // 校准时用的已知数据（用于验证）
-  createdAt: number             // 创建时间戳
+  createdAt: number // 创建时间戳
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -94,23 +108,26 @@ function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): str
   const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
   // 用「键名（含义）→ 例：数值」格式，避免模型把含义当成值
   const items = targetCols
-    .map(c => `- "${c.key}"（含义：${c.label}）→ 例：从截图读到的真实数值`)
+    .map(
+      c =>
+        `- "${c.key}"（含义：${c.label}${c.firstOnly ? '；只填排第一的那一个，不要用顿号连写多个' : ''}）→ 例：从截图读到的真实数值`,
+    )
     .join('\n')
   return (
-    `请从这些直播数据截图中，逐个读取下面每个指标的真实数值。\n\n` +
+    '请从这些直播数据截图中，逐个读取下面每个指标的真实数值。\n\n' +
     `【要提取的字段（共 ${targetCols.length} 项）】\n${items}\n\n` +
-    `【重要规则】\n` +
+    '【重要规则】\n' +
     `1. 只返回一个纯 JSON 对象，键名严格用上面的英文键名（如 "viewersWan"）。\n` +
-    `2. 【最关键】每个值必须是你从截图中**真正读到的数据**：数字、日期、时间、百分比或文本。\n` +
+    '2. 【最关键】每个值必须是你从截图中**真正读到的数据**：数字、日期、时间、百分比或文本。\n' +
     `   - 例："viewersWan" 的值应返回 5.32 这样的数字，绝对不能返回 "观看人数（w）" 或 "viewersWan" 这种文字。\n` +
     `   - 例："payGmv" 的值应返回 5234.5 这样的数字，绝对不能返回 "GMV" 或 "支付GMV"。\n` +
     `3. 截图中能看到的指标一律填写，近似也可；完全看不到/图上没有的才用 ""。\n` +
-    `4. 单位处理：\n` +
+    '4. 单位处理：\n' +
     `   - 键名含 Wan（如 viewersWan）："X万"返回 X（12.3万→12.3）；大数直接返回（123000→123000）。\n` +
-    `   - 键名含 Hour（如 durationHour）：返回小时数（2:30:00→2.5）。\n` +
-    `   - 键名含 Rate/Ratio：返回百分数数字（35%→35）。\n` +
-    `   - 其余数值按原样返回。\n` +
-    `5. 【绝对禁止】不要用 \`\`\` 包裹、不要加任何说明文字，直接输出 { 开头的 JSON。`
+    '   - 键名含 Hour（如 durationHour）：返回小时数（2:30:00→2.5）。\n' +
+    '   - 键名含 Rate/Ratio：返回百分数数字（35%→35）。\n' +
+    '   - 其余数值按原样返回。\n' +
+    '5. 【绝对禁止】不要用 ``` 包裹、不要加任何说明文字，直接输出 { 开头的 JSON。'
   )
 }
 
@@ -130,27 +147,29 @@ function buildCalibrationPrompt(
 
   // 构建示例：取前3个有已知值的字段做示例
   const sampleCols = targetCols.filter(c => knownValues[c.key]).slice(0, 3)
-  const sampleJson = sampleCols.map(c => `  "${c.key}": {"x": 0.1, "y": 0.2, "w": 0.08, "h": 0.03}`).join(',\n')
+  const sampleJson = sampleCols
+    .map(c => `  "${c.key}": {"x": 0.1, "y": 0.2, "w": 0.08, "h": 0.03}`)
+    .join(',\n')
 
   return (
-    `这是一张标准的抖音直播数据截图（如实时大屏或复盘页）。\n` +
-    `我已知道其中部分字段的真实数值。请帮我找出每个字段在截图中的位置。\n\n` +
+    '这是一张标准的抖音直播数据截图（如实时大屏或复盘页）。\n' +
+    '我已知道其中部分字段的真实数值。请帮我找出每个字段在截图中的位置。\n\n' +
     `【已知数值的字段】（共 ${items.split('\n').length} 个）\n${items}\n\n` +
-    `【你的任务】\n` +
-    `对上面列出的**每一个**已知字段，返回它在截图中的归一化坐标。\n\n` +
-    `【返回格式要求】\n` +
+    '【你的任务】\n' +
+    '对上面列出的**每一个**已知字段，返回它在截图中的归一化坐标。\n\n' +
+    '【返回格式要求】\n' +
     `- 输出纯 JSON 对象，键名必须使用上面的英文 key（如 "viewersWan"），不要用中文\n` +
-    `- 每个值是 {x, y, w, h} 对象，x/y/w/h 全部是数字类型（不是字符串！）\n` +
-    `- x,y 是字段数值区域左上角的归一化坐标（0=最左/最上，1=最右/最下）\n` +
-    `- w,h 是区域的宽高（通常 0.03~0.15 之间）\n` +
-    `- 坐标不需要非常精确，误差 ±0.05 以内即可\n\n` +
-    `【必须返回的格式示例】\n` +
+    '- 每个值是 {x, y, w, h} 对象，x/y/w/h 全部是数字类型（不是字符串！）\n' +
+    '- x,y 是字段数值区域左上角的归一化坐标（0=最左/最上，1=最右/最下）\n' +
+    '- w,h 是区域的宽高（通常 0.03~0.15 之间）\n' +
+    '- 坐标不需要非常精确，误差 ±0.05 以内即可\n\n' +
+    '【必须返回的格式示例】\n' +
     `{\n${sampleJson}\n}\n\n` +
-    `【重要】\n` +
-    `1. 必须为上面列出的每一个已知字段都返回坐标，不能遗漏\n` +
-    `2. 键名严格使用英文 key（双引号包裹），绝对不能用中文标签做键名\n` +
+    '【重要】\n' +
+    '1. 必须为上面列出的每一个已知字段都返回坐标，不能遗漏\n' +
+    '2. 键名严格使用英文 key（双引号包裹），绝对不能用中文标签做键名\n' +
     `3. x/y/w/h 必须是数字（如 0.12），不能用字符串（如 "0.12"）\n` +
-    `4. 不要用 \`\`\` 包裹，直接输出 { 开头的 JSON`
+    '4. 不要用 ``` 包裹，直接输出 { 开头的 JSON'
   )
 }
 
@@ -168,25 +187,27 @@ function buildTemplateGuidedPrompt(
     locationMap.set(f.key, f)
   }
 
-  const items = chunkCols.map(col => {
-    const loc = locationMap.get(col.key)
-    if (loc) {
-      // 把归一化坐标转成人类可读的位置描述
-      const posDesc = describePosition(loc)
-      return `- "${col.key}"（${col.label}）→ 位于 ${posDesc}，请读取该位置的数值`
-    }
-    return `- "${col.key}"（${col.label}）→ 请在截图中找到并读取`
-  }).join('\n')
+  const items = chunkCols
+    .map(col => {
+      const loc = locationMap.get(col.key)
+      if (loc) {
+        // 把归一化坐标转成人类可读的位置描述
+        const posDesc = describePosition(loc)
+        return `- "${col.key}"（${col.label}）→ 位于 ${posDesc}，请读取该位置的数值`
+      }
+      return `- "${col.key}"（${col.label}）→ 请在截图中找到并读取`
+    })
+    .join('\n')
 
   return (
-    `这是一张与标准模板布局相同的直播数据截图。请根据每个字段的大概位置来精准读取数值。\n\n` +
+    '这是一张与标准模板布局相同的直播数据截图。请根据每个字段的大概位置来精准读取数值。\n\n' +
     `【要提取的字段（共 ${chunkCols.length} 项）+ 位置指引】\n${items}\n\n` +
-    `【重要规则】\n` +
-    `1. 只返回一个纯 JSON 对象，键名用上面的英文键名。\n` +
-    `2. 每个值必须是你从截图中**真正读到的数据**：数字、日期、时间等。\n` +
+    '【重要规则】\n' +
+    '1. 只返回一个纯 JSON 对象，键名用上面的英文键名。\n' +
+    '2. 每个值必须是你从截图中**真正读到的数据**：数字、日期、时间等。\n' +
     `3. 绝对不能把字段名/标签当值回显（如 viewersWan 的值不能是"观看人数"）。如果某个位置确实找不到对应数据，用 ""。\n` +
     `4. 截图中能看到的指标一律填写近似值也可；完全看不到才用 ""。\n` +
-    `5. 不要用 \`\`\` 包裹，直接输出 JSON。`
+    '5. 不要用 ``` 包裹，直接输出 JSON。'
   )
 }
 
@@ -194,8 +215,8 @@ function buildTemplateGuidedPrompt(
  * 把归一化坐标转成人类可读的位置描述
  */
 function describePosition(loc: FieldLocation): string {
-  const cx = loc.x + loc.w / 2   // 中心 x
-  const cy = loc.y + loc.h / 2   // 中心 y
+  const cx = loc.x + loc.w / 2 // 中心 x
+  const cy = loc.y + loc.h / 2 // 中心 y
 
   // 水平方向
   let hPos: string
@@ -220,7 +241,9 @@ function normalize(s: string): string {
 
 /** 从标签去掉单位后缀 */
 function coreName(label: string): string {
-  return normalize(label).replace(/[（(][^）)]*[）)]/g, '').trim()
+  return normalize(label)
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .trim()
 }
 
 /**
@@ -284,45 +307,47 @@ function aggressiveJsonClean(jsonStr: string): string[] {
 
   // 1. 移除字符串值内的未转义换行符（最常见问题！）
   //    把 "value\nwith\nnewlines" 变成 "value with newlines"
-  let s1 = jsonStr.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
-    return match.replace(/(?<!\\)\n/g, ' ').replace(/(?<!\\)\t/g, ' ').replace(/(?<!\\)\r/g, ' ')
+  const s1 = jsonStr.replace(/"(?:[^"\\]|\\.)*"/g, match => {
+    return match
+      .replace(/(?<!\\)\n/g, ' ')
+      .replace(/(?<!\\)\t/g, ' ')
+      .replace(/(?<!\\)\r/g, ' ')
   })
   variants.push(s1)
 
   // 2. 中文标点替换
-  let s2 = s1
+  const s2 = s1
     .replace(/，/g, ',')
     .replace(/：/g, ':')
-    .replace(/"/g, '"')  // 中文引号
+    .replace(/"/g, '"') // 中文引号
     .replace(/"/g, '"')
     .replace(/（/g, '(')
     .replace(/）/g, ')')
   variants.push(s2)
 
   // 3. 移除 markdown 加粗/斜体
-  let s3 = s2.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1')
+  const s3 = s2.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1')
   variants.push(s3)
 
   // 4. 移除字符串内的控制字符（保留普通空格和换行）
-  let s4 = s3.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 这里就是要匹配控制字符，把它们从模型返回里清掉
+  const s4 = s3.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
   variants.push(s4)
 
   // 5. 修复尾逗号
-  let s5 = s4.replace(/,\s*([}\]])/g, '$1')
+  const s5 = s4.replace(/,\s*([}\]])/g, '$1')
   variants.push(s5)
 
   // 6. 单引号 → 双引号
-  let s6 = s5
-    .replace(/'([^']+)'\s*:/g, '"$1":')
-    .replace(/:\s*'([^']*)'/g, ':"$1"')
+  const s6 = s5.replace(/'([^']+)'\s*:/g, '"$1":').replace(/:\s*'([^']*)'/g, ':"$1"')
   variants.push(s6)
 
   // 7. 去掉注释（// 或 /* */）
-  let s7 = s6.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+  const s7 = s6.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
   variants.push(s7)
 
   // 8. 修复无引号的键名（key: value → "key": value）——仅当键是合法标识符时
-  let s8 = s7.replace(/(?:^|\n)\s*([a-zA-Z_]\w*)\s*:/g, '"$1":')
+  const s8 = s7.replace(/(?:^|\n)\s*([a-zA-Z_]\w*)\s*:/g, '"$1":')
   variants.push(s8)
 
   return variants
@@ -331,8 +356,12 @@ function aggressiveJsonClean(jsonStr: string): string[] {
 /**
  * 超强健 JSON 提取：多层策略
  */
-function extractJson(text: string): { result: Record<string, unknown> | null; method: string; rawSnippet?: string } {
-  let t = cleanRawText(text)
+function extractJson(text: string): {
+  result: Record<string, unknown> | null
+  method: string
+  rawSnippet?: string
+} {
+  const t = cleanRawText(text)
 
   // 保存原始片段用于日志
   const rawSnippet = t.slice(0, 1500)
@@ -366,7 +395,7 @@ function extractJson(text: string): { result: Record<string, unknown> | null; me
   const start = t.indexOf('{')
   const end = t.lastIndexOf('}')
   if (start !== -1 && end > start) {
-    let jsonStr = t.slice(start, end + 1)
+    const jsonStr = t.slice(start, end + 1)
 
     // 用激进清洗的所有变体依次尝试
     const variants = aggressiveJsonClean(jsonStr)
@@ -408,10 +437,11 @@ function extractKeyValuePairs(text: string): Record<string, unknown> | null {
   // 模式 2: "key": number
   // 模式 3: "key": true/false/null
   // 模式 4: key: value （无引号键名）
-  const combinedPattern = /(?:"([a-zA-Z_]\w*)"|([a-zA-Z_]\w*))\s*[:]\s*(?:"((?:[^"\\]|\\.)*)"|(-?\d+\.?\d*(?:[eE][+-]?\d+)?|(true|false|null)))/g
+  const combinedPattern =
+    /(?:"([a-zA-Z_]\w*)"|([a-zA-Z_]\w*))\s*[:]\s*(?:"((?:[^"\\]|\\.)*)"|(-?\d+\.?\d*(?:[eE][+-]?\d+)?|(true|false|null)))/g
 
-  let match: RegExpExecArray | null
-  while ((match = combinedPattern.exec(text)) !== null) {
+  let match: RegExpExecArray | null = combinedPattern.exec(text)
+  while (match !== null) {
     const key = match[1] || match[2]
     if (!key || key === 'null' || key === 'true' || key === 'false') continue
 
@@ -425,6 +455,7 @@ function extractKeyValuePairs(text: string): Record<string, unknown> | null {
     else val = null
 
     result[key] = val
+    match = combinedPattern.exec(text)
   }
 
   return Object.keys(result).length > 0 ? result : null
@@ -446,11 +477,26 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export class VisionRecognizer {
   private logger = createLogger('视觉识别')
 
+  /**
+   * 已被请求暂停的识别任务（按 runId）。
+   * 一次识别会发出很多次模型调用，没法中途掐断单次 HTTP 请求，
+   * 所以暂停点放在「两次调用之间」：跑完当前这次就停，结果照常返回。
+   */
+  private pausedRuns = new Set<string>()
+
+  /** 请求暂停某个识别任务（runId 由渲染进程生成） */
+  requestPause(runId?: string) {
+    if (!runId) return
+    this.pausedRuns.add(runId)
+    this.logger.info(`收到暂停请求（runId=${runId}），当前调用结束后停止`)
+  }
+
   async recognize(
     images: VisionImage[],
     config: VisionConfig,
     columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS,
     template?: VisionTemplate | null,
+    runId?: string,
   ): Promise<VisionResult> {
     const baseURL =
       config.provider === 'custom'
@@ -464,14 +510,16 @@ export class VisionRecognizer {
       throw new Error('缺少 API Key，请在页面视觉识别配置中填写')
     }
 
-    const dataUrls = await Promise.all(images.map(toDataUrl))
-    const valid = dataUrls.filter((u): u is string => !!u)
-    if (valid.length === 0) {
+    // 保留「下标 → dataURL」的对应关系，方便回传「哪几张图已经识别完」
+    const urlPairs = (
+      await Promise.all(images.map(async (img, idx) => ({ idx, url: await toDataUrl(img) })))
+    ).filter((p): p is { idx: number; url: string } => !!p.url)
+    if (urlPairs.length === 0) {
       throw new Error('没有可用的图片')
     }
 
     // ---- 图片分批（视觉模型图片数限制）----
-    const imageBatches: string[][] = chunk(valid, MAX_IMAGES_PER_BATCH)
+    const imageBatches: { idx: number; url: string }[][] = chunk(urlPairs, MAX_IMAGES_PER_BATCH)
 
     // ---- 字段分块（每块少量字段，让模型更专注、准确率更高）----
     const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
@@ -480,94 +528,126 @@ export class VisionRecognizer {
     const totalCalls = imageBatches.length * fieldChunks.length
     const useTemplate = template && template.fields.length > 0
     this.logger.info(
-      `共 ${valid.length} 张图 → ${imageBatches.length} 个图片批；${targetCols.length} 个目标字段 → ${fieldChunks.length} 个字段块；计划 ${totalCalls} 次模型调用${useTemplate ? '（使用模板位置引导）' : ''}`,
+      `共 ${urlPairs.length} 张图 → ${imageBatches.length} 个图片批；${targetCols.length} 个目标字段 → ${fieldChunks.length} 个字段块；计划 ${totalCalls} 次模型调用${useTemplate ? '（使用模板位置引导）' : ''}`,
     )
 
     const openai = new OpenAI({ apiKey: config.apiKey, baseURL })
     const mergedValues: Record<string, string> = {}
     const allLowConfidence: string[] = []
+    /** 已经完整跑完所有字段块的图片下标 */
+    const processedImageIndexes: number[] = []
+    let paused = false
 
     let callIdx = 0
 
-    for (let bi = 0; bi < imageBatches.length; bi++) {
-      const imgBatch = imageBatches[bi]
+    try {
+      for (let bi = 0; bi < imageBatches.length; bi++) {
+        const imgBatch = imageBatches[bi]
 
-      for (let ci = 0; ci < fieldChunks.length; ci++) {
-        const fChunk = fieldChunks[ci]
-        callIdx++
-        this.logger.info(
-          `▶ 调用 ${callIdx}/${totalCalls}：图片批 ${bi + 1}/${imageBatches.length}（${imgBatch.length} 张）+ 字段块 ${ci + 1}/${fieldChunks.length}（${fChunk.length} 个字段）`,
-        )
+        for (let ci = 0; ci < fieldChunks.length; ci++) {
+          // 暂停点：两次调用之间。当前这次跑完就停，已经拿到的结果全部保留
+          if (runId && this.pausedRuns.has(runId)) {
+            paused = true
+            break
+          }
+          const fChunk = fieldChunks[ci]
+          callIdx++
+          this.logger.info(
+            `▶ 调用 ${callIdx}/${totalCalls}：图片批 ${bi + 1}/${imageBatches.length}（${imgBatch.length} 张）+ 字段块 ${ci + 1}/${fieldChunks.length}（${fChunk.length} 个字段）`,
+          )
 
-        const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-          { type: 'text', text: useTemplate ? buildTemplateGuidedPrompt(fChunk, template) : buildUserPrompt(fChunk) },
-          ...imgBatch.map(
-            (url): OpenAI.Chat.Completions.ChatCompletionContentPart => ({
-              type: 'image_url',
-              image_url: { url, detail: 'high' },
-            }),
-          ),
-        ]
+          const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+            {
+              type: 'text',
+              text: useTemplate
+                ? buildTemplateGuidedPrompt(fChunk, template)
+                : buildUserPrompt(fChunk),
+            },
+            ...imgBatch.map(
+              (p): OpenAI.Chat.Completions.ChatCompletionContentPart => ({
+                type: 'image_url',
+                image_url: { url: p.url, detail: 'high' },
+              }),
+            ),
+          ]
 
-        let resp
-        try {
-          resp = await openai.chat.completions.create({
-            model: config.model,
-            messages: [
-              { role: 'system', content: buildSystemPrompt() },
-              { role: 'user', content },
-            ],
-            stream: false,
-            temperature: 0,
-          })
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          this.logger.error(`调用 ${callIdx}/${totalCalls} 失败: ${msg}`)
-          throw new Error(`视觉识别第 ${callIdx}/${totalCalls} 次调用失败: ${msg}`)
-        }
+          let resp: OpenAI.Chat.Completions.ChatCompletion
+          try {
+            resp = await openai.chat.completions.create({
+              model: config.model,
+              messages: [
+                { role: 'system', content: buildSystemPrompt() },
+                { role: 'user', content },
+              ],
+              stream: false,
+              temperature: 0,
+            })
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            this.logger.error(`调用 ${callIdx}/${totalCalls} 失败: ${msg}`)
+            throw new Error(`视觉识别第 ${callIdx}/${totalCalls} 次调用失败: ${msg}`)
+          }
 
-        const raw = resp.choices[0]?.message?.content ?? ''
-        this.logger.info(`调用 ${callIdx} 模型返回（前2000字）:\n${raw.slice(0, 2000)}`)
+          const raw = resp.choices[0]?.message?.content ?? ''
+          this.logger.info(`调用 ${callIdx} 模型返回（前2000字）:\n${raw.slice(0, 2000)}`)
 
-        const { result: parsed, method } = extractJson(raw)
+          const { result: parsed, method } = extractJson(raw)
 
-        if (!parsed) {
-          this.logger.warn(`调用 ${callIdx} 未返回可解析的 JSON（方法: ${method}）`)
-          continue
-        }
+          if (!parsed) {
+            this.logger.warn(`调用 ${callIdx} 未返回可解析的 JSON（方法: ${method}）`)
+            continue
+          }
 
-        const parsedKeys = Object.keys(parsed)
-        this.logger.info(`调用 ${callIdx} 解析到 ${parsedKeys.length} 个键: [${parsedKeys.join(', ')}]`)
+          const parsedKeys = Object.keys(parsed)
+          this.logger.info(
+            `调用 ${callIdx} 解析到 ${parsedKeys.length} 个键: [${parsedKeys.join(', ')}]`,
+          )
 
-        // 合并（只处理本块的字段）
-        let matched = 0
-        for (const col of fChunk) {
-          const v = findValue(parsed, col)
-          if (v === undefined || v === null) continue
-          const s = String(v).trim()
-          if (s === '' || s === '""') continue
-          // 只过滤「值正好等于该字段名/含义」这种最明确的回显；其余一律保留，交给用户核对
-          if (s === col.label || s === col.key) continue
-          if (!mergedValues[col.key]) {
-            mergedValues[col.key] = s
-            matched++
-            if (col.unit !== 'text') {
-              const num = Number.parseFloat(s.replace(/[^\d.\-]/g, ''))
-              if (Number.isNaN(num)) allLowConfidence.push(col.key)
+          // 合并（只处理本块的字段）
+          let matched = 0
+          for (const col of fChunk) {
+            const v = findValue(parsed, col)
+            if (v === undefined || v === null) continue
+            const s = String(v).trim()
+            if (s === '' || s === '""') continue
+            // 只过滤「值正好等于该字段名/含义」这种最明确的回显；其余一律保留，交给用户核对
+            if (s === col.label || s === col.key) continue
+            if (!mergedValues[col.key]) {
+              mergedValues[col.key] = s
+              matched++
+              if (col.unit !== 'text') {
+                const num = Number.parseFloat(s.replace(/[^\d.-]/g, ''))
+                if (Number.isNaN(num)) allLowConfidence.push(col.key)
+              }
             }
           }
+          this.logger.info(
+            `调用 ${callIdx} 匹配到 ${matched} 个字段（累计 ${Object.keys(mergedValues).length}）`,
+          )
         }
-        this.logger.info(`调用 ${callIdx} 匹配到 ${matched} 个字段（累计 ${Object.keys(mergedValues).length}）`)
+
+        // 这个图片批的所有字段块都跑完了 → 这些图算「已识别」，下次不再送模型
+        for (const p of imgBatch) processedImageIndexes.push(p.idx)
+        if (paused) break
       }
+    } finally {
+      // 无论正常结束、暂停还是报错，都要清掉暂停标记，避免影响下一次识别
+      if (runId) this.pausedRuns.delete(runId)
     }
 
-    this.logger.info(`识别完成：共写入 ${Object.keys(mergedValues).length} 个字段`)
+    if (paused) {
+      this.logger.info(
+        `已暂停：完成 ${processedImageIndexes.length}/${urlPairs.length} 张图、${Object.keys(mergedValues).length} 个字段；剩余图片下次继续`,
+      )
+    } else {
+      this.logger.info(`识别完成：共写入 ${Object.keys(mergedValues).length} 个字段`)
+    }
 
     // 派生计算
     const derived = computeDerivedValues(mergedValues, columns)
     for (const [k, v] of Object.entries(derived)) mergedValues[k] = v
 
-    return { values: mergedValues, lowConfidence: allLowConfidence }
+    return { values: mergedValues, lowConfidence: allLowConfidence, paused, processedImageIndexes }
   }
 
   /**
@@ -603,11 +683,18 @@ export class VisionRecognizer {
     const resp = await openai.chat.completions.create({
       model: config.model,
       messages: [
-        { role: 'system', content: '你是一个精确的 UI 元素定位助手。从截图中找出指定字段数值所在的区域，返回归一化坐标。' },
-        { role: 'user', content: [
-          { type: 'text', text: buildCalibrationPrompt(columns, knownValues) },
-          { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
-        ] },
+        {
+          role: 'system',
+          content:
+            '你是一个精确的 UI 元素定位助手。从截图中找出指定字段数值所在的区域，返回归一化坐标。',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: buildCalibrationPrompt(columns, knownValues) },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+          ],
+        },
       ],
       stream: false,
       temperature: 0,
@@ -640,18 +727,22 @@ export class VisionRecognizer {
      */
     function extractCoord(val: unknown): { x: number; y: number; w?: number; h?: number } | null {
       if (!val) return null
-      if (typeof val === 'string') {
+      let coordVal: unknown = val
+      if (typeof coordVal === 'string') {
         // 尝试解析 JSON 字符串
         try {
-          val = JSON.parse(val)
-        } catch { /* 不是JSON */ }
+          coordVal = JSON.parse(coordVal)
+        } catch {
+          /* 不是JSON */
+        }
       }
-      if (typeof val !== 'object' || !val) return null
-      const o = val as Record<string, unknown>
+      if (typeof coordVal !== 'object' || !coordVal) return null
+      const o = coordVal as Record<string, unknown>
 
       // 格式1: 对象 {x, y, w, h}
       if ('x' in o && 'y' in o) {
-        const x = Number(o.x), y = Number(o.y)
+        const x = Number(o.x)
+        const y = Number(o.y)
         if (!Number.isNaN(x) && !Number.isNaN(y)) {
           return {
             x,
@@ -664,9 +755,15 @@ export class VisionRecognizer {
 
       // 格式2: 数组 [x, y] 或 [x, y, w, h]
       if (Array.isArray(o) && o.length >= 2) {
-        const x = Number(o[0]), y = Number(o[1])
+        const x = Number(o[0])
+        const y = Number(o[1])
         if (!Number.isNaN(x) && !Number.isNaN(y)) {
-          return { x, y, w: o.length >= 3 ? Number(o[2]) : undefined, h: o.length >= 4 ? Number(o[3]) : undefined }
+          return {
+            x,
+            y,
+            w: o.length >= 3 ? Number(o[2]) : undefined,
+            h: o.length >= 4 ? Number(o[3]) : undefined,
+          }
         }
       }
 
@@ -675,7 +772,7 @@ export class VisionRecognizer {
 
     // 解析坐标 → FieldLocation[]
     const fields: FieldLocation[] = []
-    const matchedByLabel: string[] = []  // 通过标签名匹配的
+    const matchedByLabel: string[] = [] // 通过标签名匹配的
 
     for (const col of columns) {
       if (col.source === 'skip' || col.source === 'computed') continue
@@ -692,7 +789,10 @@ export class VisionRecognizer {
         for (const [pk, pv] of Object.entries(parsed)) {
           if (normalize(pk) === normLabel) {
             coord = extractCoord(pv)
-            if (coord) { matchedByLabel.push(col.key); break }
+            if (coord) {
+              matchedByLabel.push(col.key)
+              break
+            }
           }
         }
       }
@@ -709,7 +809,9 @@ export class VisionRecognizer {
       })
     }
 
-    this.logger.info(`校准完成：定位了 ${fields.length} 个字段位置（其中 ${matchedByLabel.length} 个通过标签名匹配）`)
+    this.logger.info(
+      `校准完成：定位了 ${fields.length} 个字段位置（其中 ${matchedByLabel.length} 个通过标签名匹配）`,
+    )
 
     // 构建已知值中不在 fields 里的条目日志
     const missingKeys = Object.keys(knownValues).filter(k => !fields.some(f => f.key === k))

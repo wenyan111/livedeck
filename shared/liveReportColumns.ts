@@ -27,6 +27,27 @@ export interface LiveReportColumn {
    * （用户 2026-11-05 要求「可以自定义字段四舍五入」）
    */
   decimals?: number
+  /**
+   * 多值字段只保留第一项。
+   * 例：「观看核心城市」在截图里是「广东、浙江、江苏、…」，表格里只要第一名 → 开这个就只填「广东」。
+   * （用户 2026-11-05 要求「如何只填写一个城市」）
+   */
+  firstOnly?: boolean
+}
+
+/**
+ * 取多值文本里的第一项。
+ * 支持中文顿号、中英文逗号、分号、斜杠、竖线等常见分隔符；
+ * 末尾的悬空分隔符（「广东、浙江、江苏、」）不会产生空项。
+ */
+export function takeFirstItem(raw: string): string {
+  const text = (raw ?? '').trim()
+  if (!text) return ''
+  const parts = text
+    .split(/[、，,；;/|｜]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+  return parts[0] ?? text
 }
 
 /**
@@ -203,7 +224,7 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
   const text = (raw ?? '').trim()
   if (text === '') return ''
 
-  if (column.unit === 'text') return text
+  if (column.unit === 'text') return column.firstOnly ? takeFirstItem(text) : text
   if (column.unit === 'wan') {
     const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
     if (Number.isNaN(num)) return text

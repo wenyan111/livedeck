@@ -98,6 +98,8 @@ export const IPC_CHANNELS = {
   // 直播日报（视觉识别 + 本地 Excel 导出）
   dataEntry: {
     recognize: 'dataEntry:recognize',
+    /** 暂停正在进行的识别（在两次模型调用之间停下，已完成的结果照样返回） */
+    pauseRecognize: 'dataEntry:pauseRecognize',
     selectOutputPath: 'dataEntry:selectOutputPath',
     exportExcel: 'dataEntry:exportExcel',
     generateTemplate: 'dataEntry:generateTemplate',

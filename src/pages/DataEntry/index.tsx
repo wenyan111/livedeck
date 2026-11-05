@@ -1,5 +1,15 @@
 import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
-import { ChevronDown, ChevronUp, MapPin, Plus, Settings2, Table, Trash2 } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  MapPin,
+  Pause,
+  Plus,
+  RefreshCw,
+  Settings2,
+  Table,
+  Trash2,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
@@ -12,6 +22,7 @@ import {
   LIVE_REPORT_COLUMNS,
   type LiveReportColumn,
   roundByColumn,
+  takeFirstItem,
 } from 'shared/liveReportColumns'
 import { providers } from 'shared/providers'
 import { platformLabels } from '@/abilities'
@@ -34,6 +45,11 @@ interface LocalImage {
   id: string
   url: string
   name: string
+  /**
+   * 是否已经被视觉模型完整识别过。
+   * 已经识别过的图不再重复送模型（省时间也省钱），新加进来的图默认 false。
+   */
+  recognized?: boolean
 }
 
 interface DataRow {
@@ -551,18 +567,19 @@ function ColumnManagerModal({
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头 */}
-          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_92px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <span>标签名</span>
             <span>单位</span>
             <span>类型</span>
             <span>分组</span>
             <span title="四舍五入到几位小数">小数位</span>
+            <span title="一个格子里有多个值时怎么办（如「广东、浙江、江苏」）">多值</span>
             <span />
           </div>
           {draft.map((col, idx) => (
             <div
               key={col.key}
-              className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 items-center"
+              className="grid grid-cols-[1fr_82px_100px_96px_76px_92px_32px] gap-2 items-center"
             >
               <Input
                 value={col.label}
@@ -624,6 +641,27 @@ function ColumnManagerModal({
                   <SelectItem value="4">4 位</SelectItem>
                 </SelectContent>
               </Select>
+              {/* 多值字段怎么取值：全留 / 只留第一项（文本列才有意义） */}
+              <Select
+                value={col.firstOnly ? 'first' : 'all'}
+                onValueChange={v => update(idx, { firstOnly: v === 'first' })}
+                disabled={col.unit !== 'text'}
+              >
+                <SelectTrigger
+                  className="h-8 text-xs"
+                  title={
+                    col.unit === 'text'
+                      ? '一个格子里出现多个值（如「广东、浙江、江苏」）时怎么处理'
+                      : '只有「文本」类型的字段需要设置'
+                  }
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部保留</SelectItem>
+                  <SelectItem value="first">只取第一项</SelectItem>
+                </SelectContent>
+              </Select>
               <button
                 type="button"
                 onClick={() => remove(idx)}
@@ -665,18 +703,30 @@ export default function DataEntry() {
    * 混在一起识别会串字段）。key = platform。
    */
   const [imagesByPlatform, setImagesByPlatform] = useState<Record<string, LocalImage[]>>({})
+  /** 图片列表的最新快照：粘贴/拖入时要在同步代码里查重，不能等 setState 回调 */
+  const imagesRef = useRef<Record<string, LocalImage[]>>({})
   const imagesOf = useCallback(
     (p: LiveControlPlatform): LocalImage[] => imagesByPlatform[p] ?? [],
     [imagesByPlatform],
   )
   const setImagesOf = useCallback(
     (p: LiveControlPlatform, updater: (prev: LocalImage[]) => LocalImage[]) => {
-      setImagesByPlatform(prev => ({ ...prev, [p]: updater(prev[p] ?? []) }))
+      setImagesByPlatform(prev => {
+        const next = { ...prev, [p]: updater(prev[p] ?? []) }
+        imagesRef.current = next
+        return next
+      })
     },
     [],
   )
   const [cropTarget, setCropTarget] = useState<LocalImage | null>(null)
+  /** 正在识别哪个板块（null = 没在识别）；同时用来在多板块间做互斥 */
   const [recognizing, setRecognizing] = useState(false)
+  const [recognizingKey, setRecognizingKey] = useState<string | null>(null)
+  /** 已点了「暂停识别」，等当前这次模型调用跑完就停 */
+  const [pausing, setPausing] = useState(false)
+  /** 当前这次识别的 runId，暂停时要靠它告诉主进程停哪个任务 */
+  const runIdRef = useRef<string | null>(null)
   /**
    * 直播日报是**全账号、全平台共用的一张表**（用户 2026-11-05 明确）：
    * 切换账号 / 平台时这张表不该跟着变。
@@ -870,18 +920,27 @@ export default function DataEntry() {
       if (!file.type.startsWith('image/')) return
       const reader = new FileReader()
       reader.onload = () => {
+        const url = String(reader.result)
+        // 同一张图反复粘贴/拖入很常见（比如截屏后连按两次 ⌘V）。
+        // 内容一样就直接忽略，不然列表里堆一堆重复图，识别时还要多花几次调用。
+        if ((imagesRef.current[platform] ?? []).some(i => i.url === url)) {
+          toast.error('这张截图已经在列表里了，无需重复添加')
+          return
+        }
         setImagesOf(platform, prev => [
           ...prev,
           {
             id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            url: String(reader.result),
+            url,
             name: file.name || `截图-${prev.length + 1}.png`,
+            // 新加的图默认「待识别」
+            recognized: false,
           },
         ])
       }
       reader.readAsDataURL(file)
     },
-    [setImagesOf],
+    [setImagesOf, toast],
   )
 
   const addImageFiles = useCallback(
@@ -965,17 +1024,27 @@ export default function DataEntry() {
     return () => window.removeEventListener('paste', onPaste)
   }, [addImageFromFile, activeRow?.platform])
 
-  /** 识别 → 结果写入该平台当前活跃的那一行 */
+  /**
+   * 识别 → 结果写入该板块当前活跃的那一行。
+   *
+   * 只送**还没识别过**的截图（已识别的图不再重复看，省时间也省钱）；
+   * 传 opts.images 可以强制识别指定图片（单张「重认」/「重认全部」用）。
+   */
   const handleRecognize = useCallback(
-    async (platform: LiveControlPlatform) => {
-      const platformImages = imagesOf(platform)
+    async (platform: LiveControlPlatform, opts?: { images?: LocalImage[] }) => {
+      const allImages = imagesOf(platform)
+      const targetImages = opts?.images ?? allImages.filter(i => !i.recognized)
       const platformColumns = columns.filter(c => c.platform === platform)
       // 该平台的活跃行：优先选中行，否则第一条该平台的行
       const targetRow =
         rows.find(r => r.id === activeRowId && r.platform === platform) ??
         rows.find(r => r.platform === platform)
-      if (platformImages.length === 0) {
+      if (allImages.length === 0) {
         toast.error('请先选择截图')
+        return
+      }
+      if (targetImages.length === 0) {
+        toast.error('这些截图都识别过了。要重新识别请点「重认全部」')
         return
       }
       if (platformColumns.length === 0) {
@@ -986,10 +1055,19 @@ export default function DataEntry() {
         toast.error('请先在上方填写视觉模型 API Key')
         return
       }
+      // 用 ref 判重（state 是异步的，连点两下会穿透）
+      if (runIdRef.current) {
+        toast.error('正在识别中，先等这次跑完或点「暂停识别」')
+        return
+      }
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      runIdRef.current = runId
       setRecognizing(true)
+      setRecognizingKey(platform)
+      setPausing(false)
       try {
         const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.recognize, {
-          images: platformImages.map(i => ({ base64: i.url })),
+          images: targetImages.map(i => ({ base64: i.url })),
           config: {
             provider: config.provider,
             model: config.model,
@@ -998,6 +1076,7 @@ export default function DataEntry() {
           },
           columns: platformColumns,
           templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
+          runId, // 暂停时按这个 id 找到本次任务
         })
         // 合并到当前活跃行
         setRows(prev =>
@@ -1010,6 +1089,12 @@ export default function DataEntry() {
                 merged[c.key] = roundByColumn(merged[c.key], c)
               }
             }
+            // 「只取第一项」的文本列（如观看核心城市）：广东、浙江、江苏 → 广东
+            for (const c of platformColumns) {
+              if (c.firstOnly && merged[c.key]) {
+                merged[c.key] = takeFirstItem(merged[c.key])
+              }
+            }
             // 时间列补成「开始-结束」时间段
             composeTimeRange(merged)
             // 识别到日期时，自动补「周标签」
@@ -1020,16 +1105,36 @@ export default function DataEntry() {
             return { ...r, values: merged, lowConfidence: result.lowConfidence ?? [] }
           }),
         )
+        // 把「已经完整识别完」的图打上标记，下次不再重复送模型
+        const doneIds = (result.processedImageIndexes ?? [])
+          .map(idx => targetImages[idx]?.id)
+          .filter((id): id is string => !!id)
+        if (doneIds.length > 0) {
+          const doneSet = new Set(doneIds)
+          setImagesOf(platform, prev =>
+            prev.map(i => (doneSet.has(i.id) ? { ...i, recognized: true } : i)),
+          )
+        }
         const filled = Object.keys(result.values).length
-        toast.success(
-          `识别完成，成功提取 ${filled} 项写入「${sectionLabel(platform)}」第 ${
-            rows.filter(r => r.platform === platform).findIndex(r => r.id === targetRow?.id) + 1
-          } 行，请核对后导出`,
-        )
+        const rowNo =
+          rows.filter(r => r.platform === platform).findIndex(r => r.id === targetRow?.id) + 1
+        if (result.paused) {
+          const rest = targetImages.length - doneIds.length
+          toast.success(
+            `已暂停：${doneIds.length} 张图、${filled} 项已写入第 ${rowNo} 行，还剩 ${rest} 张待识别，继续会接着看剩下的`,
+          )
+        } else {
+          toast.success(
+            `识别完成，${targetImages.length} 张图提取 ${filled} 项写入「${sectionLabel(platform)}」第 ${rowNo} 行，请核对后导出`,
+          )
+        }
       } catch (error) {
         toast.error(`识别失败：${error instanceof Error ? error.message : String(error)}`)
       } finally {
+        runIdRef.current = null
         setRecognizing(false)
+        setRecognizingKey(null)
+        setPausing(false)
       }
     },
     [
@@ -1044,8 +1149,22 @@ export default function DataEntry() {
       columns,
       template,
       sectionLabel,
+      setImagesOf,
     ],
   )
+
+  /** 暂停识别：只在两次模型调用之间生效，已经跑完的结果不会丢 */
+  const handlePauseRecognize = useCallback(async () => {
+    const runId = runIdRef.current
+    if (!runId) return
+    setPausing(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.pauseRecognize, { runId })
+    } catch {
+      // 暂停失败不影响识别继续跑完
+      setPausing(false)
+    }
+  }, [])
 
   /** 加载已保存的模板 */
   useEffect(() => {
@@ -1301,6 +1420,11 @@ export default function DataEntry() {
         const pfRows = rows.filter(r => (r.platform as string) === pf)
         const pfImages = imagesOf(pk)
         const pfActiveIndex = pfRows.findIndex(r => r.id === activeRowId)
+        /** 还没识别过的图（「开始识别」只送这些） */
+        const pfPending = pfImages.filter(i => !i.recognized)
+        const pfDone = pfImages.length - pfPending.length
+        /** 本板块是否正在识别 */
+        const pfRunning = recognizing && recognizingKey === pf
         return (
           <Card key={pf}>
             <CardHeader>
@@ -1376,16 +1500,50 @@ export default function DataEntry() {
                   <Button size="sm" onClick={() => fileInputs.current[pk]?.click()}>
                     选择截图
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleRecognize(pk)}
-                    disabled={recognizing || pfImages.length === 0}
-                  >
-                    {recognizing
-                      ? '识别中...'
-                      : `开始识别 → 写入第 ${pfActiveIndex >= 0 ? pfActiveIndex + 1 : 1} 行`}
-                  </Button>
+                  {/* 识别中：同一个位置变成「暂停识别」，跑完当前这次模型调用就停 */}
+                  {pfRunning ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handlePauseRecognize}
+                      disabled={pausing}
+                    >
+                      <Pause className="w-3.5 h-3.5 mr-1" />
+                      {pausing ? '正在暂停…' : '暂停识别'}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleRecognize(pk)}
+                      disabled={recognizing || pfPending.length === 0}
+                      title={
+                        pfPending.length === 0
+                          ? '所有截图都识别过了；要重新识别请点旁边的「重认全部」'
+                          : `只识别新加的 ${pfPending.length} 张，已识别的 ${pfDone} 张不会重复送模型`
+                      }
+                    >
+                      {`${
+                        pfDone > 0 && pfPending.length > 0 ? '继续识别' : '开始识别'
+                      }${pfPending.length > 0 ? ` ${pfPending.length} 张` : ''} → 写入第 ${
+                        pfActiveIndex >= 0 ? pfActiveIndex + 1 : 1
+                      } 行`}
+                    </Button>
+                  )}
+                  {/* 需要推倒重来时用：把所有图重新识别一遍（会重新花钱调用模型） */}
+                  {!pfRunning && pfDone > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="px-2 text-muted-foreground"
+                      onClick={() => handleRecognize(pk, { images: pfImages })}
+                      disabled={recognizing}
+                      title={`忽略「已识别」标记，把这 ${pfImages.length} 张图全部重新识别一遍`}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                      重认全部
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant={template ? 'secondary' : 'outline'}
@@ -1410,7 +1568,9 @@ export default function DataEntry() {
                     onChange={e => handleSelectFiles(e, pk)}
                   />
                   <span className="text-xs text-muted-foreground">
-                    支持拖拽 / ⌘V 粘贴；可多选整屏、流量、商品、人群
+                    {pfImages.length === 0
+                      ? '支持拖拽 / ⌘V 粘贴；可多选整屏、流量、商品、人群'
+                      : `共 ${pfImages.length} 张 · 已识别 ${pfDone} 张 · 待识别 ${pfPending.length} 张`}
                   </span>
                 </div>
 
@@ -1419,10 +1579,29 @@ export default function DataEntry() {
                     {pfImages.map(img => (
                       <div
                         key={img.id}
-                        className="group relative overflow-hidden rounded-md border"
+                        className={`group relative overflow-hidden rounded-md border ${
+                          img.recognized ? 'border-emerald-500/50' : ''
+                        }`}
                       >
                         <img src={img.url} alt={img.name} className="h-16 w-full object-cover" />
+                        {/* 已识别的图打勾，下次「开始识别」会跳过它们 */}
+                        {img.recognized && (
+                          <span className="absolute left-1 top-1 rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-medium text-white">
+                            ✓ 已识别
+                          </span>
+                        )}
                         <div className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 opacity-0 transition group-hover:opacity-100">
+                          {img.recognized && (
+                            <button
+                              type="button"
+                              className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground"
+                              onClick={() => handleRecognize(pk, { images: [img] })}
+                              disabled={recognizing}
+                              title="只把这一张重新识别一遍"
+                            >
+                              重认
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="rounded bg-primary px-1.5 py-0.5 text-[10px] text-white"

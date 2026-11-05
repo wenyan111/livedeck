@@ -189,7 +189,17 @@ export interface IpcChannels {
     config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
     columns?: LiveReportColumn[]
     templateId?: string // 传 'use-saved' 使用已保存的模板
-  }) => { values: Record<string, string>; lowConfidence: string[] }
+    /** 本次识别的任务 id，暂停时用它定位 */
+    runId?: string
+  }) => {
+    values: Record<string, string>
+    lowConfidence: string[]
+    /** 是否被「暂停识别」提前结束 */
+    paused?: boolean
+    /** 已完整识别完的图片在入参 images 中的下标 */
+    processedImageIndexes?: number[]
+  }
+  [IPC_CHANNELS.dataEntry.pauseRecognize]: (params: { runId?: string }) => boolean
   [IPC_CHANNELS.dataEntry.selectOutputPath]: () => string | null
   [IPC_CHANNELS.dataEntry.exportExcel]: (params: {
     values?: Record<string, string>
