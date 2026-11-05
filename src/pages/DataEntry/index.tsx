@@ -731,6 +731,15 @@ export default function DataEntry() {
   /** 总表筛选：看哪个板块（'' = 全部） */
   const [ledgerFilter, setLedgerFilter] = useState('')
   /**
+   * 方舟用哪种方式调模型：
+   * - model：直接填模型 ID（需在方舟开通该模型）
+   * - endpoint：填自己在控制台建的推理接入点 ep-xxxxxxxx
+   * 只影响这栏的提示与快捷项，真正发给接口的都是同一个 model 字段。
+   */
+  const [volcMode, setVolcMode] = useState<'model' | 'endpoint'>(() =>
+    config.model.trim().startsWith('ep-') ? 'endpoint' : 'model',
+  )
+  /**
    * 截图多选：按板块记选中的图片 id。
    * 用来「挑几张一起重认」（单张 hover 的「重认」只能一张一张点，用户 2026-11-05 反馈要能多张）。
    */
@@ -2346,17 +2355,53 @@ export default function DataEntry() {
               </Select>
             ) : (
               <div className="space-y-1">
+                {/* 方舟两种调法：直连模型 ID / 自己建的推理接入点 ep-xxx。
+                    给两个明确的切换入口，别让人猜 ep 该填哪。 */}
+                {config.provider === 'volcengine' && (
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVolcMode('model')
+                        if (config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                      }}
+                      className={`rounded border px-2 py-0.5 text-[10px] transition ${
+                        volcMode === 'model'
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border text-muted-foreground hover:border-primary/50'
+                      }`}
+                    >
+                      用模型 ID
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVolcMode('endpoint')
+                        if (!config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                      }}
+                      className={`rounded border px-2 py-0.5 text-[10px] transition ${
+                        volcMode === 'endpoint'
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border text-muted-foreground hover:border-primary/50'
+                      }`}
+                    >
+                      用接入点 ep-
+                    </button>
+                  </div>
+                )}
                 <Input
                   value={config.model}
                   onChange={e => setConfig({ model: e.target.value })}
                   list={config.provider === 'volcengine' ? 'vision-model-suggest' : undefined}
                   placeholder={
-                    config.provider === 'volcengine'
-                      ? '模型 ID（如 doubao-seed-2-1-pro-260915）或接入点 ep-xxx'
-                      : '如 glm-4v-plus'
+                    config.provider !== 'volcengine'
+                      ? '如 glm-4v-plus'
+                      : volcMode === 'endpoint'
+                        ? 'ep-2026100411306-xxxxx（你在方舟建的接入点）'
+                        : 'doubao-seed-2-1-pro-260915（模型 ID）'
                   }
                 />
-                {config.provider === 'volcengine' && (
+                {config.provider === 'volcengine' && volcMode === 'model' && (
                   <>
                     <datalist id="vision-model-suggest">
                       {VOLC_VISION_MODELS.map(m => (
@@ -2382,10 +2427,16 @@ export default function DataEntry() {
                       ))}
                     </div>
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      直连模型 ID 需先在方舟「开通」该模型；也可以在方舟控制台建一个接入点，把那串
-                      <code className="px-0.5">ep-xxxxxxxx</code> 填到上面。
+                      直连模型 ID 需要先在方舟「开通」这个模型，开通后直接填上面的 ID 即可。
                     </p>
                   </>
+                )}
+                {config.provider === 'volcengine' && volcMode === 'endpoint' && (
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    去方舟控制台 →「在线推理」→ 创建接入点 → 选中 doubao 视觉模型 → 把生成的{' '}
+                    <code className="px-0.5">ep-xxxxxxxx</code>
+                    填到这里。这个方式不用额外开通模型，但每换一个模型都要建一个新接入点。
+                  </p>
                 )}
               </div>
             )}
