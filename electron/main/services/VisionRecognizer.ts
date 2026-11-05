@@ -474,6 +474,34 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
+/**
+ * 同时最多发几次模型调用。
+ *
+ * 之前是一个字段块跑完再跑下一个，10 个字段 × 好几个图片批全排成一条线，
+ * 用户实测十几分钟才出结果。字段块之间读的字段不重叠，并发不影响正确性，
+ * 只把等待时间叠在一起。4 是稳妥值：方舟默认限流够用，也不至于把账单节奏打乱。
+ */
+const CALL_CONCURRENCY = 4
+
+/** 限制并发地跑一批任务，返回结果顺序与入参一致 */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++
+      if (i >= items.length) return
+      results[i] = await fn(items[i] as T, i)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
 export class VisionRecognizer {
   private logger = createLogger('视觉识别')
 
@@ -557,73 +585,130 @@ export class VisionRecognizer {
 
     let callIdx = 0
 
+    /**
+     * 火山方舟的豆包是「思考型」模型，默认会先在内部写一大段推理再给答案。
+     * 识别这种「照抄数字」的活完全不需要推理：实测输出动辄 1700+ tokens 全是思考链，
+     * 既慢又费钱。所以方舟的请求一律先关掉思考；万一该模型不认这个参数，
+     * 会在下面自动去掉再重试一次（不会因为参数问题直接失败）。
+     */
+    const supportsThinkingOff = config.provider === 'volcengine' || baseURL.includes('volces.com')
+
+    /** 跑一个字段块（= 一次模型调用） */
+    const runChunk = async (
+      imgBatch: { idx: number; url: string }[],
+      fChunk: LiveReportColumn[],
+      bi: number,
+      ci: number,
+    ): Promise<{
+      ci: number
+      callNo: number
+      parsed: Record<string, unknown> | null
+      skipped: boolean
+    }> => {
+      // 暂停点：每个任务开始前检查一次（并发时仍在排队的不再发出）
+      if (runId && this.pausedRuns.has(runId)) {
+        return { ci, callNo: 0, parsed: null, skipped: true }
+      }
+      const callNo = ++callIdx
+      const startedAt = Date.now()
+      this.logger.info(
+        `▶ 调用 ${callNo}/${totalCalls}：图片批 ${bi + 1}/${imageBatches.length}（${imgBatch.length} 张）+ 字段块 ${ci + 1}/${fieldChunks.length}（${fChunk.length} 个字段）`,
+      )
+
+      const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+        {
+          type: 'text',
+          text: useTemplate ? buildTemplateGuidedPrompt(fChunk, template) : buildUserPrompt(fChunk),
+        },
+        ...imgBatch.map(
+          (p): OpenAI.Chat.Completions.ChatCompletionContentPart => ({
+            type: 'image_url',
+            image_url: { url: p.url, detail: 'high' },
+          }),
+        ),
+      ]
+
+      type Body = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {
+        thinking?: { type: 'disabled' | 'enabled' }
+      }
+      const body: Body = {
+        model: config.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content },
+        ],
+        stream: false,
+        temperature: 0,
+      }
+      if (supportsThinkingOff) body.thinking = { type: 'disabled' }
+
+      let resp: OpenAI.Chat.Completions.ChatCompletion
+      try {
+        resp = await openai.chat.completions.create(body)
+      } catch (err) {
+        // 关思考的参数有些模型/版本不认 → 去掉再试一次，别让识别直接挂掉
+        if (supportsThinkingOff) {
+          delete body.thinking
+          try {
+            resp = await openai.chat.completions.create(body)
+          } catch (err2) {
+            const msg = err2 instanceof Error ? err2.message : String(err2)
+            this.logger.error(`调用 ${callNo}/${totalCalls} 失败: ${msg}`)
+            throw new Error(`视觉识别第 ${callNo}/${totalCalls} 次调用失败: ${msg}`)
+          }
+        } else {
+          const msg = err instanceof Error ? err.message : String(err)
+          this.logger.error(`调用 ${callNo}/${totalCalls} 失败: ${msg}`)
+          throw new Error(`视觉识别第 ${callNo}/${totalCalls} 次调用失败: ${msg}`)
+        }
+      }
+
+      const cost = Date.now() - startedAt
+      const usage = resp.usage
+      this.logger.info(
+        `✔ 调用 ${callNo} 耗时 ${(cost / 1000).toFixed(1)}s${
+          usage
+            ? `（输入 ${usage.prompt_tokens ?? '?'} / 输出 ${usage.completion_tokens ?? '?'} tokens）`
+            : ''
+        }`,
+      )
+
+      const raw = resp.choices[0]?.message?.content ?? ''
+      this.logger.info(`调用 ${callNo} 模型返回（前2000字）:\n${raw.slice(0, 2000)}`)
+
+      const { result: parsed, method } = extractJson(raw)
+      if (!parsed) {
+        this.logger.warn(`调用 ${callNo} 未返回可解析的 JSON（方法: ${method}）`)
+        return { ci, callNo, parsed: null, skipped: false }
+      }
+      const parsedKeys = Object.keys(parsed)
+      this.logger.info(
+        `调用 ${callNo} 解析到 ${parsedKeys.length} 个键: [${parsedKeys.join(', ')}]`,
+      )
+      return { ci, callNo, parsed: parsed as Record<string, unknown>, skipped: false }
+    }
+
     try {
       for (let bi = 0; bi < imageBatches.length; bi++) {
         const imgBatch = imageBatches[bi]
+        const batchStartedAt = Date.now()
 
-        for (let ci = 0; ci < fieldChunks.length; ci++) {
-          // 暂停点：两次调用之间。当前这次跑完就停，已经拿到的结果全部保留
-          if (runId && this.pausedRuns.has(runId)) {
-            paused = true
-            break
-          }
-          const fChunk = fieldChunks[ci]
-          callIdx++
-          this.logger.info(
-            `▶ 调用 ${callIdx}/${totalCalls}：图片批 ${bi + 1}/${imageBatches.length}（${imgBatch.length} 张）+ 字段块 ${ci + 1}/${fieldChunks.length}（${fChunk.length} 个字段）`,
-          )
+        // 同一批图片的多个字段块**并发**发出去：彼此读的字段完全不重叠，
+        // 并发不影响结果，只把等待时间从「相加」变成「重叠」。
+        // 图片批之间保持串行，保证「先出现的截图里的值优先」这个规则不变。
+        const results = await mapWithConcurrency(fieldChunks, CALL_CONCURRENCY, (fChunk, ci) =>
+          runChunk(imgBatch, fChunk, bi, ci),
+        )
 
-          const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-            {
-              type: 'text',
-              text: useTemplate
-                ? buildTemplateGuidedPrompt(fChunk, template)
-                : buildUserPrompt(fChunk),
-            },
-            ...imgBatch.map(
-              (p): OpenAI.Chat.Completions.ChatCompletionContentPart => ({
-                type: 'image_url',
-                image_url: { url: p.url, detail: 'high' },
-              }),
-            ),
-          ]
+        if (results.some(r => r.skipped)) paused = true
 
-          let resp: OpenAI.Chat.Completions.ChatCompletion
-          try {
-            resp = await openai.chat.completions.create({
-              model: config.model,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content },
-              ],
-              stream: false,
-              temperature: 0,
-            })
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
-            this.logger.error(`调用 ${callIdx}/${totalCalls} 失败: ${msg}`)
-            throw new Error(`视觉识别第 ${callIdx}/${totalCalls} 次调用失败: ${msg}`)
-          }
-
-          const raw = resp.choices[0]?.message?.content ?? ''
-          this.logger.info(`调用 ${callIdx} 模型返回（前2000字）:\n${raw.slice(0, 2000)}`)
-
-          const { result: parsed, method } = extractJson(raw)
-
-          if (!parsed) {
-            this.logger.warn(`调用 ${callIdx} 未返回可解析的 JSON（方法: ${method}）`)
-            continue
-          }
-
-          const parsedKeys = Object.keys(parsed)
-          this.logger.info(
-            `调用 ${callIdx} 解析到 ${parsedKeys.length} 个键: [${parsedKeys.join(', ')}]`,
-          )
-
-          // 合并（只处理本块的字段）
+        // 按字段块顺序合并（与并发完成先后无关，结果稳定可复现）
+        for (const r of [...results].sort((a, b) => a.ci - b.ci)) {
+          if (!r.parsed) continue
+          const fChunk = fieldChunks[r.ci]
           let matched = 0
           for (const col of fChunk) {
-            const v = findValue(parsed, col)
+            const v = findValue(r.parsed, col)
             if (v === undefined || v === null) continue
             const s = String(v).trim()
             if (s === '' || s === '""') continue
@@ -639,9 +724,14 @@ export class VisionRecognizer {
             }
           }
           this.logger.info(
-            `调用 ${callIdx} 匹配到 ${matched} 个字段（累计 ${Object.keys(mergedValues).length}）`,
+            `调用 ${r.callNo} 匹配到 ${matched} 个字段（累计 ${Object.keys(mergedValues).length}）`,
           )
         }
+        this.logger.info(
+          `图片批 ${bi + 1}/${imageBatches.length} 完成，用时 ${(
+            (Date.now() - batchStartedAt) / 1000
+          ).toFixed(1)}s，累计 ${Object.keys(mergedValues).length} 个字段`,
+        )
 
         // 只有这一批的**所有**字段块都跑完了，才把这些图算「已识别」。
         // 暂停发生在批中间时不能标记，否则剩下的字段块再也不会被读，数据就悄悄缺了。
