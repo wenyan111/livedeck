@@ -626,8 +626,11 @@ export class VisionRecognizer {
           )
         }
 
-        // 这个图片批的所有字段块都跑完了 → 这些图算「已识别」，下次不再送模型
-        for (const p of imgBatch) processedImageIndexes.push(p.idx)
+        // 只有这一批的**所有**字段块都跑完了，才把这些图算「已识别」。
+        // 暂停发生在批中间时不能标记，否则剩下的字段块再也不会被读，数据就悄悄缺了。
+        if (!paused) {
+          for (const p of imgBatch) processedImageIndexes.push(p.idx)
+        }
         if (paused) break
       }
     } finally {
