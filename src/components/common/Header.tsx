@@ -5,7 +5,11 @@ import { cn } from '@/lib/utils'
 import { AccountSwitcher } from './AccountSwitcher'
 
 /** 这些页面的主体本身就是「全账号」视图，头部的单账号切换/状态徽标在此没有意义（会误导） */
-const HIDE_ACCOUNT_CONTROLS_ROUTES = ['/live-control-manage']
+const HIDE_ACCOUNT_CONTROLS_ROUTES = [
+  '/live-control-manage',
+  // 直播日报是「全账号一张表」，头部这条围绕当前账号的连接状态/平台切换没有意义
+  '/data-entry',
+]
 
 export function Header() {
   const location = useLocation()

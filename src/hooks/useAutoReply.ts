@@ -384,11 +384,27 @@ const sendQueueDepth = new Map<string, number>()
 /** 单个账号最多排队多少条回复，超出的直接丢弃并记日志（宁可不发过期的，也不要刷屏） */
 const MAX_PENDING_SENDS = 10
 
+/**
+ * 写自动回复日志。
+ *
+ * 带 accountId 时会把平台名拼进 scope（`@视频号 -> 自动回复`），
+ * 否则运行日志里只显示「自动回复」，看不出是哪个平台出问题
+ * （用户 2026-11-05 反馈）。
+ */
 function writeAutoReplyLog(
   level: 'info' | 'warn' | 'error' | 'success' | 'debug',
   message: string,
+  accountId?: string,
 ) {
-  window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, { level, scope: '自动回复', message })
+  // 用**账号名**（用户自定义的，如「英子」），不是平台名。
+  // 主进程那边的日志一直是 `@${account.name} -> 任务`，这里保持一致；
+  // 之前误用了平台名（显示成「巨量百应 · 自动回复」），用户 2026-11-05 指出。
+  let scope = '自动回复'
+  if (accountId) {
+    const name = useAccounts.getState().accounts.find(a => a.id === accountId)?.name
+    if (name) scope = `@${name} -> 自动回复`
+  }
+  window.ipcRenderer.invoke(IPC_CHANNELS.app.writeLog, { level, scope, message })
 }
 
 /** 直接发送一条回复（非串行平台走这里，行为与改动前一致，只多了日志） */
@@ -406,10 +422,10 @@ async function sendMessageDirectly(
       content,
       mentionTarget,
     )
-    writeAutoReplyLog('success', `已回复${who}：${content}`)
+    writeAutoReplyLog('success', `已回复${who}：${content}`, accountId)
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    writeAutoReplyLog('error', `回复${who}发送失败：${reason}`)
+    writeAutoReplyLog('error', `回复${who}发送失败：${reason}`, accountId)
     errorHandler(err, '自动发送回复失败')
   }
 }
@@ -440,7 +456,7 @@ async function sendMessage(
   const who = nickname ? `观众 [${nickname}] ` : ''
   if (!content) {
     // 以前这里是静默 return：界面显示了一条回复，实际什么都没发，日志也查不到
-    writeAutoReplyLog('warn', `${who}的回复内容为空，已跳过发送。`)
+    writeAutoReplyLog('warn', `${who}的回复内容为空，已跳过发送。`, accountId)
     return
   }
   // 其他平台维持原来的「直接发送」行为，不做任何改动
@@ -466,6 +482,7 @@ async function sendMessage(
       'warn',
       `未走真@：平台=${platform ?? '(空)'} 平台支持=${mentionPlatformOk ? '是' : '否'}` +
         ` 开关=${mentionEnabled ? '开' : '关'} replyTo=${replyTo ? '有' : '无'}`,
+      accountId,
     )
   }
 
@@ -478,6 +495,7 @@ async function sendMessage(
     writeAutoReplyLog(
       'warn',
       `${who}的回复已丢弃：该账号还有 ${depth} 条回复在排队发送（上限 ${MAX_PENDING_SENDS} 条），避免把过期回复刷到公屏。`,
+      accountId,
     )
     return
   }
@@ -503,11 +521,11 @@ async function sendMessage(
       ])
       // 发送成功也要留痕：主进程那行「成功发送第 1/1 条评论」不带昵称，
       // 出问题时无法回溯这条回复到底是发给谁的。
-      writeAutoReplyLog('success', `已回复${who}：${content}`)
+      writeAutoReplyLog('success', `已回复${who}：${content}`, accountId)
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       // 以前只 toast，不写文件日志，事后完全查不到
-      writeAutoReplyLog('error', `回复${who}发送失败：${reason}`)
+      writeAutoReplyLog('error', `回复${who}发送失败：${reason}`, accountId)
       errorHandler(err, '自动发送回复失败')
     } finally {
       sendQueueDepth.set(accountId, Math.max(0, (sendQueueDepth.get(accountId) ?? 1) - 1))
@@ -653,6 +671,7 @@ const handleAIReply = async (
         writeAutoReplyLog(
           'warn',
           `观众 [${comment.nick_name}] 的回复已生成，但「自动发送」未开启，只显示在界面未发送。`,
+          accountId,
         )
       }
     }
@@ -796,7 +815,11 @@ export function useAutoReply() {
       ) {
         // 以前这里是静默 return：主播自己发的弹幕没回复时，日志里完全查不到原因
         // 降到 debug：运行日志面板不再刷屏，但 main.log 仍保留，便于事后排查
-        writeAutoReplyLog('debug', `弹幕来自主播本人 [${comment.nick_name}]，跳过不予回复。`)
+        writeAutoReplyLog(
+          'debug',
+          `弹幕来自主播本人 [${comment.nick_name}]，跳过不予回复。`,
+          accountId,
+        )
         return
       }
 
@@ -905,6 +928,7 @@ export function useAutoReply() {
               writeAutoReplyLog(
                 'debug',
                 `观众 [${comment.nick_name}] 的弹幕 "${commentContent}" 未命中关键字回复，且 AI 回复未开启，跳过不予回复。`,
+                accountId,
               )
             }
           }

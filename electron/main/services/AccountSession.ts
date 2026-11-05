@@ -1,5 +1,7 @@
 import { Result } from '@praha/byethrow'
+import type { Page } from 'playwright'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import type { StreamEndSignal } from 'shared/streamEnd'
 import { TaskNotSupportedError } from '#/errors/AppError'
 import { emitter } from '#/event/eventBus'
 import { createLogger } from '#/logger'
@@ -71,11 +73,110 @@ export class AccountSession {
   private openPriceMissCount = 0
 
   constructor(
-    private platformName: LiveControlPlatform,
+    public readonly platformName: LiveControlPlatform,
     private account: Account,
     private logger = createLogger(`@${account.name}`),
   ) {
     this.platform = new platformFactory[platformName]()
+  }
+
+  /** 取一个可用于探测的中控台页面（各平台方法名不同，能取到哪个用哪个） */
+  private getProbePage(): Page | null {
+    const platform = this.platform as unknown as {
+      getCommentPage?: () => Page | null
+      getPopupPage?: () => Page | null
+    }
+    try {
+      return platform.getCommentPage?.() ?? platform.getPopupPage?.() ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 页面上是否出现「已下播」信号（跨所有 frame 查找）。
+   *
+   * 判定策略（2026-11-05 按各平台实测下播界面实现）：
+   * ① 优先在**可见弹层**里找（`[class*=modal]` / `[class*=dialog]` / `[role=dialog]`），
+   *    这样不会被页面其它位置的同名字样误判；
+   * ② `scope: 'any'` 的信号额外允许全页文本匹配 —— 用于快手这种整块面板、
+   *    以及淘宝那种一闪而过的红色提示条。
+   *
+   * 相比"数任务失败次数"，读一次 DOM 更准，而且窗口在后台也能读到
+   * （后台只节流定时器和渲染，DOM 文本照常可查）。
+   */
+  async hasStreamEndSignal(signals: StreamEndSignal[]): Promise<boolean> {
+    const page = this.getProbePage()
+    if (!page) return false
+    for (const frame of page.frames()) {
+      const hit = await frame
+        .evaluate(list => {
+          type FlagWindow = Window & {
+            __lsdStreamEnd?: string
+            __lsdObs?: MutationObserver
+          }
+          const w = window as FlagWindow
+          const norm = (t: string) => (t ?? '').replace(/\s+/g, '')
+          const visible = (el: Element) => {
+            const rect = (el as HTMLElement).getBoundingClientRect()
+            if (rect.width <= 0 || rect.height <= 0) return false
+            const style = getComputedStyle(el as HTMLElement)
+            return style.visibility !== 'hidden' && style.display !== 'none'
+          }
+
+          const detect = (): string | null => {
+            const popups = Array.from(
+              document.querySelectorAll<HTMLElement>(
+                '[class*="modal"], [class*="dialog"], [role="dialog"]',
+              ),
+            ).filter(visible)
+            // textContent 不触发重排，比 innerText 便宜得多；
+            // 这里只做「包含」判断，隐藏节点里出现同名字样也不影响结论
+            const bodyText = norm(document.body?.textContent ?? '')
+            for (const signal of list) {
+              const target = norm(signal.text)
+              // ① 可见弹层内的文字（抖音/小红书只认这个，避免历史记录误判）
+              if (popups.some(el => norm(el.textContent ?? '').includes(target))) return signal.text
+              // ② 全页文字（快手整块面板 / 视频号 / 淘宝的一闪而过提示条）
+              if (signal.scope === 'any' && bodyText.includes(target)) return signal.text
+            }
+            return null
+          }
+
+          // 之前已经命中过 → 直接算数（提示条可能早就消失了）
+          if (w.__lsdStreamEnd) return true
+
+          const now = detect()
+          if (now) {
+            w.__lsdStreamEnd = now
+            return true
+          }
+
+          // 装一个观察者：淘宝那种只闪 3~5 秒的提示，20 秒轮询会漏，
+          // 由观察者在它出现的瞬间把标记记下来，下次轮询读到即可。
+          if (!w.__lsdObs) {
+            // 节流：直播页弹幕每秒几十次变动，回调若不做限流会白跑上千次
+            let lastCheck = 0
+            const observer = new MutationObserver(() => {
+              const nowAt = Date.now()
+              if (nowAt - lastCheck < 500) return // 0.5 秒最多检查一次
+              lastCheck = nowAt
+              const found = detect()
+              if (found) w.__lsdStreamEnd = found
+            })
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true,
+              characterData: true,
+            })
+            w.__lsdObs = observer
+          }
+          return false
+        }, signals)
+        .catch(() => false)
+      if (hit) return true
+    }
+    return false
   }
 
   /**

@@ -17,8 +17,18 @@ export class DataEntryStateService {
     try {
       const raw = await fs.readFile(this.filePath, 'utf-8')
       const parsed = JSON.parse(raw)
-      if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0 && typeof parsed.activeRowId === 'string') {
-        return parsed as DataEntrySavedState
+      if (
+        parsed &&
+        Array.isArray(parsed.rows) &&
+        parsed.rows.length > 0 &&
+        typeof parsed.activeRowId === 'string'
+      ) {
+        // 旧数据没有 platform：之前只有抖音一套字段，统一归到 douyin
+        const rows = (parsed.rows as DataEntrySavedState['rows']).map(r => ({
+          ...r,
+          platform: (r.platform ?? 'douyin') as LiveControlPlatform,
+        }))
+        return { rows, activeRowId: parsed.activeRowId as string }
       }
     } catch {
       // 文件不存在或损坏 → 返回 null

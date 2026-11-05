@@ -1,5 +1,5 @@
-import path from 'node:path'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { app } from 'electron'
 import { LIVE_REPORT_COLUMNS, type LiveReportColumn } from 'shared/liveReportColumns'
 import { createLogger } from '#/logger'
@@ -23,6 +23,8 @@ export class LiveReportColumnsService {
       if (Array.isArray(parsed) && parsed.length > 0) {
         // 补齐缺失字段，避免旧格式缺字段导致前端报错
         return parsed.map(c => ({
+          // 旧数据没有 platform：内置那批本来就是抖音字段，统一归到 douyin
+          platform: (c.platform ?? 'douyin') as LiveReportColumn['platform'],
           key: String(c.key ?? ''),
           label: String(c.label ?? ''),
           unit: (c.unit ?? 'none') as LiveReportColumn['unit'],

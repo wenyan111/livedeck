@@ -1,18 +1,20 @@
+import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
+import { ChevronDown, ChevronUp, MapPin, Plus, Settings2, Table, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import {
-  LIVE_REPORT_COLUMNS,
-  convertColumnValue,
-  computeDerivedValues,
   COMPUTED_DEPENDENCY_KEYS,
-  getDefaultColumns,
+  computeDerivedValues,
+  convertColumnValue,
   generateColumnKey,
+  getDefaultColumns,
+  LIVE_REPORT_COLUMNS,
   type LiveReportColumn,
+  roundByColumn,
 } from 'shared/liveReportColumns'
-import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { providers } from 'shared/providers'
-import { useAIProvider } from '@/hooks/useAIProvider'
-import { useToast } from '@/hooks/useToast'
+import { platformLabels } from '@/abilities'
 import { Title } from '@/components/common/Title'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -25,9 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Table, Trash2, Plus, ChevronDown, ChevronUp, Settings2, MapPin } from 'lucide-react'
-
-import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
+import { useAIProvider } from '@/hooks/useAIProvider'
+import { useToast } from '@/hooks/useToast'
 
 interface LocalImage {
   id: string
@@ -37,6 +38,8 @@ interface LocalImage {
 
 interface DataRow {
   id: string
+  /** 归属平台：只使用该平台自己那套列 */
+  platform: LiveControlPlatform
   values: Record<string, string>
   lowConfidence: string[]
 }
@@ -46,28 +49,106 @@ function reconcileRows(rows: DataRow[], newColumns: LiveReportColumn[]): DataRow
   return rows.map(r => {
     const next: Record<string, string> = {}
     for (const c of newColumns) next[c.key] = r.values[c.key] ?? ''
+    // 历史数据里的「时间」可能只是个开始点，这里补成时间段
+    composeTimeRange(next)
+    // 周标签空着但有日期 → 顺便补上（老数据没有这个自动值）
+    if (!next.weekLabel && next.date) {
+      const label = weekdayLabel(next.date)
+      if (label) next.weekLabel = label
+    }
     Object.assign(next, computeDerivedValues(next, newColumns))
     return { ...r, values: next }
   })
 }
 
-function todayStr(): string {
-  const d = new Date()
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+/**
+ * 按「平台 + key」去重。
+ *
+ * 背景（2026-11-05 事故）：删除板块时把字段并进第一个板块，
+ * 而这些字段常是从第一个板块导入的副本（key 相同），
+ * 于是同一个字段出现两三次，行里显示一大片重复网格。
+ */
+/**
+ * 「时间」列应该是**时间段**（如 06:40-09:30），而不是单个开始时间。
+ *
+ * 截图识别通常只能读到开始时间，所以这里用「开始时间 + 直播时长」算出结束时间，
+ * 自动补成 `06:40-09:30` 的形式（用户 2026-11-05 要求）。
+ * 只在 time 还是「单个时间」时才拼，已经是时间段就原样保留。
+ */
+function composeTimeRange(values: Record<string, string>): void {
+  const raw = String(values.time ?? '').trim()
+
+  // 方向一：时间是「06:40-09:30」→ 反算直播时长（保证两边互相同步）
+  const range = raw.match(/^(\d{1,2}):(\d{2})\s*[-~至]\s*(\d{1,2}):(\d{2})$/)
+  if (range) {
+    const start = Number(range[1]) * 60 + Number(range[2])
+    let end = Number(range[3]) * 60 + Number(range[4])
+    if (end < start) end += 24 * 60 // 跨零点（如 23:30-01:10）
+    const hours = (end - start) / 60
+    if (hours > 0) {
+      const digits = digitsForDuration(values)
+      values.durationHour = String(+hours.toFixed(digits))
+    }
+    return
+  }
+
+  // 方向二：时间是单个「06:40」→ 用开始时间 + 直播时长拼成时间段
+  const single = raw.match(/^(\d{1,2}):(\d{2})$/)
+  if (!single) return
+  const duration = Number.parseFloat(String(values.durationHour ?? '').replace(/[^\d.]/g, ''))
+  if (!Number.isFinite(duration) || duration <= 0) return
+  const startMin = Number(single[1]) * 60 + Number(single[2])
+  const endMin = Math.round(startMin + duration * 60)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  values.time = `${pad(Number(single[1]))}:${single[2]}-${pad(Math.floor(endMin / 60) % 24)}:${pad(endMin % 60)}`
+}
+
+/** 直播时长默认保留 2 位（列上配了小数位就用配置的） */
+function digitsForDuration(values: Record<string, string>): number {
+  const configured = Number(values.__durationDecimals)
+  return Number.isFinite(configured) ? configured : 2
+}
+
+function dedupeColumns(columns: LiveReportColumn[]): LiveReportColumn[] {
+  const seen = new Set<string>()
+  const out: LiveReportColumn[] = []
+  for (const c of columns) {
+    const k = `${c.platform}::${c.key}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(c)
+  }
+  return out
 }
 
 function buildDefaultValues(columns: LiveReportColumn[]): Record<string, string> {
   const v: Record<string, string> = {}
   for (const c of columns) v[c.key] = ''
-  v.date = todayStr()
-  v.session = '1'
+  // 日期**不预填**：以截图识别到的为准（用户 2026-11-05 要求），
+  // 没识别到就留空，由用户手动补
   return v
 }
 
-function createRow(columns: LiveReportColumn[]): DataRow {
+/**
+ * 从日期字符串算出「周几」，用于自动填「周标签」。
+ * 兼容 2026-11-05 / 2026/11/05 / 2026年11月5日 等写法。
+ */
+function weekdayLabel(dateStr: string): string | null {
+  const m = (dateStr ?? '').match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  if (!y || mo < 1 || mo > 12 || d < 1 || d > 31) return null
+  const date = new Date(y, mo - 1, d)
+  if (Number.isNaN(date.getTime())) return null
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()] ?? null
+}
+
+function createRow(columns: LiveReportColumn[], platform: LiveControlPlatform): DataRow {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    platform,
     values: buildDefaultValues(columns),
     lowConfidence: [],
   }
@@ -145,6 +226,7 @@ function CropModal({
         <p className="mb-3 text-sm text-muted-foreground">
           在图片上按住鼠标拖拽框选要识别的区域，松手后点「确认裁剪」
         </p>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: 图片框选用鼠标拖拽，键盘不适用 */}
         <div
           ref={containerRef}
           className="relative inline-block max-h-[70vh] overflow-hidden"
@@ -152,7 +234,12 @@ function CropModal({
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
         >
-          <img ref={imgRef} src={image.url} alt={image.name} className="max-h-[70vh] max-w-[90vw]" />
+          <img
+            ref={imgRef}
+            src={image.url}
+            alt={image.name}
+            className="max-h-[70vh] max-w-[90vw]"
+          />
           {rect && (
             <div
               className="absolute border-2 border-primary bg-primary/20"
@@ -177,7 +264,6 @@ function CropModal({
 function RowCard({
   row,
   rowIndex,
-  rowCount,
   isActive,
   columns,
   onSelect,
@@ -199,13 +285,10 @@ function RowCard({
     const map = new Map<string, LiveReportColumn[]>()
     for (const c of columns) {
       if (!map.has(c.group)) map.set(c.group, [])
-      map.get(c.group)!.push(c)
+      map.get(c.group)?.push(c)
     }
     return Array.from(map.entries())
   }, [columns])
-
-  // 行摘要：日期 + 主播 + 场次
-  const summary = `${row.values.date || '未填日期'} · ${row.values.anchorName || '未填主播'} · 第${row.values.session || '?'}场`
 
   return (
     <div
@@ -214,27 +297,82 @@ function RowCard({
       }`}
     >
       {/* 行头：摘要 + 操作按钮 */}
+      {/* biome-ignore lint/a11y/useSemanticElements: 行头里嵌着输入框，不能用 <button> 包住 */}
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none"
+        role="button"
+        tabIndex={0}
+        className="flex cursor-pointer select-none items-center gap-2.5 px-3 py-2"
         onClick={() => setExpanded(e => !e)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded(v => !v)
+          }
+        }}
       >
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onSelect() }}
+          onClick={e => {
+            e.stopPropagation()
+            onSelect()
+          }}
           className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs font-bold shrink-0 ${
-            isActive ? 'border-primary bg-primary text-white' : 'border-muted-foreground/30 text-muted-foreground'
+            isActive
+              ? 'border-primary bg-primary text-white'
+              : 'border-muted-foreground/30 text-muted-foreground'
           }`}
         >
           {rowIndex + 1}
         </button>
-        <span className="text-sm font-medium flex-1 truncate">{summary}</span>
+        {/* 行头直接可填：日期 / 主播 / 场次（原来是一串拼接文字，
+            「第${session}场」还会拼出「第早场场」，用户 2026-11-05 反馈 */}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: 这里只为阻止冒泡，没有可点击行为 */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: 同上，键盘无需处理 */}
+        <div
+          className="flex min-w-0 flex-1 items-center gap-1.5"
+          onClick={e => e.stopPropagation()}
+        >
+          <Input
+            value={row.values.date ?? ''}
+            onChange={e => onUpdateValues(row.id, 'date', e.target.value)}
+            placeholder="日期"
+            className="h-6 w-[92px] px-1.5 text-xs"
+            title="日期"
+          />
+          <Input
+            value={row.values.anchorName ?? ''}
+            onChange={e => onUpdateValues(row.id, 'anchorName', e.target.value)}
+            placeholder="主播名称"
+            className="h-6 min-w-0 flex-1 px-1.5 text-xs"
+            title="主播名称"
+          />
+          <Input
+            value={row.values.session ?? ''}
+            onChange={e => onUpdateValues(row.id, 'session', e.target.value)}
+            placeholder="场次"
+            className="h-6 w-[64px] px-1.5 text-xs"
+            title="场次（如：早场 / 晚场）"
+          />
+        </div>
         <span className="text-xs text-muted-foreground hidden sm:inline">
-          {Object.entries(row.values).filter(([k, v]) => v.trim() !== '' && columns.find(c => c.key === k)?.source === 'vision').length} 项已识别
+          {
+            Object.entries(row.values).filter(
+              ([k, v]) => v.trim() !== '' && columns.find(c => c.key === k)?.source === 'vision',
+            ).length
+          }{' '}
+          项已识别
         </span>
-        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+        {expanded ? (
+          <ChevronUp className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-muted-foreground" />
+        )}
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onDelete(row.id) }}
+          onClick={e => {
+            e.stopPropagation()
+            onDelete(row.id)
+          }}
           className="text-destructive hover:text-destructive/80 p-1 rounded hover:bg-destructive/10"
           title="删除此行"
         >
@@ -244,11 +382,13 @@ function RowCard({
 
       {/* 展开的字段网格 */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t pt-3">
+        <div className="px-3 pb-2.5 space-y-2 border-t pt-2">
           {groups.map(([group, cols]) => (
             <div key={group}>
-              <h3 className="text-xs font-semibold mb-2 text-muted-foreground uppercase tracking-wider">{group}</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
+              <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {group}
+              </h3>
+              <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
                 {cols.map(col => {
                   const val = row.values[col.key] ?? ''
                   const isManual = col.source === 'manual'
@@ -267,22 +407,34 @@ function RowCard({
                           : filled
                             ? 'bg-success/10'
                             : 'bg-destructive/10'
-                  const placeholder = isManual
-                    ? '（人工填写）'
-                    : isSkip
-                      ? '（留空）'
-                      : isComputed
-                        ? '（自动计算）'
-                        : ''
+                  const placeholder =
+                    col.key === 'time'
+                      ? '如 06:40-09:30'
+                      : isManual
+                        ? '（人工填写）'
+                        : isSkip
+                          ? '（留空）'
+                          : isComputed
+                            ? '（自动计算）'
+                            : ''
                   return (
-                    <div key={col.key} className="space-y-1">
-                      <Label className="text-[11px] leading-tight">{col.label}</Label>
+                    <div key={col.key} className="space-y-px">
+                      <Label className="text-[10px] leading-tight text-muted-foreground">
+                        {col.label}
+                      </Label>
                       <Input
                         value={val}
                         onChange={e => onUpdateValues(row.id, col.key, e.target.value)}
-                        className={`h-8 text-sm ${ring}`}
+                        className={`h-6 px-1.5 text-[11px] ${ring}`}
                         disabled={isSkip}
                         placeholder={placeholder}
+                        title={
+                          col.key === 'time'
+                            ? '时间段，如 06:40-09:30。只填开始时间时，会按「直播时长」自动补全结束时间'
+                            : col.decimals !== undefined
+                              ? `四舍五入到 ${col.decimals} 位小数`
+                              : undefined
+                        }
                       />
                     </div>
                   )
@@ -299,14 +451,50 @@ function RowCard({
 /** 列管理弹窗：增 / 删 / 改标签、单位、类型、分组 */
 function ColumnManagerModal({
   columns,
+  allColumns,
+  platform,
+  labelOf,
   onCancel,
   onSave,
 }: {
+  /** 当前板块自己的列（只显示这些，保存时也只替换这些） */
   columns: LiveReportColumn[]
+  /** 全部列，用于「从其它板块导入字段」 */
+  allColumns: LiveReportColumn[]
+  /** 当前正在编辑哪个板块（新增/导入的列归到这个板块） */
+  platform: LiveControlPlatform
+  /** 把板块 key 转成显示名（自定义板块没有平台名，靠这个兜底） */
+  labelOf: (key: string) => string
   onCancel: () => void
   onSave: (cols: LiveReportColumn[]) => void
 }) {
+  const { toast } = useToast()
   const [draft, setDraft] = useState<LiveReportColumn[]>(() => columns.map(c => ({ ...c })))
+
+  /** 可导入来源：其它板块里已有的列 */
+  const importSources = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const c of allColumns) {
+      const key = c.platform as string
+      if (key === (platform as string)) continue
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return [...map.entries()]
+  }, [allColumns, platform])
+
+  /** 把某个板块的字段整套复制过来（同 key 的跳过，避免重复） */
+  const importFrom = (src: string) => {
+    const existing = new Set(draft.map(c => c.key))
+    const added = allColumns
+      .filter(c => (c.platform as string) === src && !existing.has(c.key))
+      .map(c => ({ ...c, platform }))
+    if (added.length === 0) {
+      toast.error('没有可导入的新字段（已全部存在）')
+      return
+    }
+    setDraft(prev => [...prev, ...added])
+    toast.success(`已导入 ${added.length} 个字段，记得点「保存」`)
+  }
 
   const update = (idx: number, patch: Partial<LiveReportColumn>) =>
     setDraft(prev => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)))
@@ -314,7 +502,14 @@ function ColumnManagerModal({
   const add = () =>
     setDraft(prev => [
       ...prev,
-      { key: generateColumnKey(prev), label: '新标签', unit: 'text', source: 'manual', group: '自定义' },
+      {
+        platform,
+        key: generateColumnKey(prev),
+        label: '新标签',
+        unit: 'text',
+        source: 'manual',
+        group: '自定义',
+      },
     ])
   const reset = () => {
     if (window.confirm('恢复为默认 53 列？当前自定义修改将丢失')) {
@@ -332,27 +527,55 @@ function ColumnManagerModal({
               可新增 / 删除 / 改名标签，也可改单位与类型。修改后导出与识别会随之更新。
             </p>
           </div>
-          <span className="text-xs text-muted-foreground">{draft.length} 列</span>
+          <div className="flex items-center gap-2">
+            {importSources.length > 0 && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">导入字段：</span>
+                {importSources.map(([src, count]) => (
+                  <Button
+                    key={src}
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-1.5 text-[11px]"
+                    title={`把「${labelOf(src)}」的 ${count} 个字段复制到本板块`}
+                    onClick={() => importFrom(src)}
+                  >
+                    {labelOf(src)}
+                  </Button>
+                ))}
+              </div>
+            )}
+            <span className="text-xs text-muted-foreground">{draft.length} 列</span>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头 */}
-          <div className="grid grid-cols-[1fr_88px_104px_110px_36px] gap-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
+          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <span>标签名</span>
             <span>单位</span>
             <span>类型</span>
             <span>分组</span>
-            <span></span>
+            <span title="四舍五入到几位小数">小数位</span>
+            <span />
           </div>
           {draft.map((col, idx) => (
-            <div key={col.key} className="grid grid-cols-[1fr_88px_104px_110px_36px] gap-2 items-center">
+            <div
+              key={col.key}
+              className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 items-center"
+            >
               <Input
                 value={col.label}
                 onChange={e => update(idx, { label: e.target.value })}
-                className="h-8 text-sm"
+                className="h-8 text-xs"
               />
-              <Select value={col.unit} onValueChange={u => update(idx, { unit: u as LiveReportColumn['unit'] })}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <Select
+                value={col.unit}
+                onValueChange={u => update(idx, { unit: u as LiveReportColumn['unit'] })}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">无</SelectItem>
                   <SelectItem value="wan">万</SelectItem>
@@ -361,8 +584,13 @@ function ColumnManagerModal({
                   <SelectItem value="text">文本</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={col.source} onValueChange={s => update(idx, { source: s as LiveReportColumn['source'] })}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <Select
+                value={col.source}
+                onValueChange={s => update(idx, { source: s as LiveReportColumn['source'] })}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="manual">人工填写</SelectItem>
                   <SelectItem value="vision">视觉识别</SelectItem>
@@ -373,8 +601,29 @@ function ColumnManagerModal({
               <Input
                 value={col.group}
                 onChange={e => update(idx, { group: e.target.value })}
-                className="h-8 text-sm"
+                className="h-8 text-xs"
               />
+              {/* 每列单独设置四舍五入位数：原始 / 0 / 1 / 2 / 3 / 4 */}
+              <Select
+                value={col.decimals === undefined ? 'raw' : String(col.decimals)}
+                onValueChange={v =>
+                  update(idx, {
+                    decimals: v === 'raw' ? undefined : Number(v),
+                  })
+                }
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="raw">原始</SelectItem>
+                  <SelectItem value="0">0 位</SelectItem>
+                  <SelectItem value="1">1 位</SelectItem>
+                  <SelectItem value="2">2 位</SelectItem>
+                  <SelectItem value="3">3 位</SelectItem>
+                  <SelectItem value="4">4 位</SelectItem>
+                </SelectContent>
+              </Select>
               <button
                 type="button"
                 onClick={() => remove(idx)}
@@ -398,9 +647,7 @@ function ColumnManagerModal({
             <Button variant="outline" onClick={onCancel}>
               取消
             </Button>
-            <Button onClick={() => onSave(draft)}>
-              保存
-            </Button>
+            <Button onClick={() => onSave(draft)}>保存</Button>
           </div>
         </div>
       </div>
@@ -413,19 +660,140 @@ export default function DataEntry() {
   const { config, apiKeys, customBaseURL, setConfig, setApiKey, setCustomBaseURL } =
     useAIProvider('vision')
 
-  const [images, setImages] = useState<LocalImage[]>([])
+  /**
+   * 截图按平台存放：每个平台的板块有自己的截图列表（各平台大屏结构不同，
+   * 混在一起识别会串字段）。key = platform。
+   */
+  const [imagesByPlatform, setImagesByPlatform] = useState<Record<string, LocalImage[]>>({})
+  const imagesOf = useCallback(
+    (p: LiveControlPlatform): LocalImage[] => imagesByPlatform[p] ?? [],
+    [imagesByPlatform],
+  )
+  const setImagesOf = useCallback(
+    (p: LiveControlPlatform, updater: (prev: LocalImage[]) => LocalImage[]) => {
+      setImagesByPlatform(prev => ({ ...prev, [p]: updater(prev[p] ?? []) }))
+    },
+    [],
+  )
   const [cropTarget, setCropTarget] = useState<LocalImage | null>(null)
   const [recognizing, setRecognizing] = useState(false)
-  const [rows, setRows] = useState<DataRow[]>([createRow(LIVE_REPORT_COLUMNS)])
+  /**
+   * 直播日报是**全账号、全平台共用的一张表**（用户 2026-11-05 明确）：
+   * 切换账号 / 平台时这张表不该跟着变。
+   *
+   * 所以这里用一个固定的内部 key，只用于「截图列表」等本地缓存的分组，
+   * 与当前登录的账号平台无关。行和列上的 `platform` 字段保留只为兼容旧数据。
+   */
+  const TABLE_PLATFORM = 'douyin' as LiveControlPlatform
+
+  const [rows, setRows] = useState<DataRow[]>(() => [
+    createRow(LIVE_REPORT_COLUMNS, TABLE_PLATFORM),
+  ])
   const [activeRowId, setActiveRowId] = useState<string>(() => rows[0]?.id ?? '')
   const [columnModalOpen, setColumnModalOpen] = useState(false)
+  /** 「管理列」当前在编辑哪个平台 */
+  const [columnModalPlatform, setColumnModalPlatform] =
+    useState<LiveControlPlatform>(TABLE_PLATFORM)
+  /**
+   * 板块列表。每个板块有**独立的 key**，与平台枚举解耦：
+   * 早期版本直接用平台当 key，导致「把第一个板块改名为巨量百应后，
+   * 就再也加不回抖音小店了」（用户 2026-11-05 指出）。
+   *
+   * 现在：key 只是标识，名称由 sectionNames 决定，平台只作为初始名称/字段模板来源。
+   */
+  const [sectionPlatforms, setSectionPlatforms] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('data-entry-sections')
+      const parsed = raw ? (JSON.parse(raw) as string[]) : null
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    } catch {
+      // 忽略损坏的本地缓存
+    }
+    return [TABLE_PLATFORM]
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('data-entry-sections', JSON.stringify(sectionPlatforms))
+    } catch {
+      // 存不进去也不影响使用
+    }
+  }, [sectionPlatforms])
+
+  /**
+   * 板块自定义名称（板块标题可以直接改，存 localStorage）。
+   * 例如把「抖音小店」改成「英子-抖音」。
+   */
+  const [sectionNames, setSectionNames] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem('data-entry-section-names')
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+    } catch {
+      return {}
+    }
+  })
+  /**
+   * 板块显示名：优先用用户自己改的名字（如「巨量百应」），
+   * 没改过才回落到平台原名。导出按钮、提示文案都走这里，
+   * 保证「你看到的板块名」和「按钮上的名字」一致（用户 2026-11-05 反馈）。
+   */
+  const sectionLabel = useCallback(
+    (key: string) =>
+      sectionNames[key]?.trim() || platformLabels[key as LiveControlPlatform] || '新板块',
+    [sectionNames],
+  )
+
+  const setSectionName = useCallback((key: string, name: string) => {
+    setSectionNames(prev => {
+      const next = { ...prev, [key]: name }
+      try {
+        localStorage.setItem('data-entry-section-names', JSON.stringify(next))
+      } catch {
+        // 存不进去也不影响当前会话
+      }
+      return next
+    })
+  }, [])
+
+  /**
+   * 数据归位：早期的迁移把「行 / 列」的 platform 跟着当前账号改过，
+   * 于是可能出现「行属于 kuaishou、但页面板块里没有 kuaishou」→ 数据显示不出来。
+   * 这里一次性纠正：凡是 platform 不在板块列表里的行和列，全部并入第一个板块，
+   * **只改归属，不改任何字段值**（用户 2026-11-05：原有数据不能丢）。
+   */
+  const adoptedRef = useRef(false)
+  useEffect(() => {
+    if (!loadedRef.current || adoptedRef.current) return
+    if (sectionPlatforms.length === 0) return
+    const first = sectionPlatforms[0]
+    const inSections = (pf?: string) => Boolean(pf) && sectionPlatforms.includes(pf as string)
+
+    setRows(prev => {
+      if (prev.every(r => inSections(r.platform))) return prev
+      adoptedRef.current = true
+      return prev.map(r =>
+        inSections(r.platform) ? r : { ...r, platform: first as LiveControlPlatform },
+      )
+    })
+    setColumns(prev => {
+      if (prev.every(c => inSections(c.platform))) return prev
+      const next = prev.map(c =>
+        inSections(c.platform) ? c : { ...c, platform: first as LiveControlPlatform },
+      )
+      void window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveColumns, next)
+      return next
+    })
+  }, [sectionPlatforms])
+
+  /** 每个板块各自的文件选择框 */
+  const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [columns, setColumns] = useState<LiveReportColumn[]>(LIVE_REPORT_COLUMNS)
   const [isDragging, setIsDragging] = useState(false)
   // 视觉模板
-  const [template, setTemplate] = useState<{ id: string; name: string; fieldCount: number } | null>(null)
+  const [template, setTemplate] = useState<{ id: string; name: string; fieldCount: number } | null>(
+    null,
+  )
   const [calibrating, setCalibrating] = useState(false)
   const dragCounter = useRef(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   // 初始加载完成前，禁止自动保存覆盖已存档数据
   const loadedRef = useRef(false)
 
@@ -439,8 +807,14 @@ export default function DataEntry() {
           | LiveReportColumn[]
           | undefined
         if (cancelled) return
-        safe = cols && cols.length > 0 ? cols : getDefaultColumns()
+        const raw = cols && cols.length > 0 ? cols : getDefaultColumns()
+        safe = dedupeColumns(raw)
         setColumns(safe)
+        // 发现重复字段（删除板块合并造成）→ 立刻把清理后的版本写回磁盘，
+        // 否则下次打开又会重复一遍
+        if (safe.length !== raw.length) {
+          void window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveColumns, safe)
+        }
       } catch {
         if (!cancelled) setColumns(getDefaultColumns())
       }
@@ -448,9 +822,9 @@ export default function DataEntry() {
       // 载入已保存的表单数据（防 app 重启丢失）
       let restored = false
       try {
-        const saved = (await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.getRows)) as
-          | DataEntrySavedState
-          | null
+        const saved = (await window.ipcRenderer.invoke(
+          IPC_CHANNELS.dataEntry.getRows,
+        )) as DataEntrySavedState | null
         if (cancelled) return
         if (saved && Array.isArray(saved.rows) && saved.rows.length > 0) {
           const reconciled = reconcileRows(saved.rows, safe)
@@ -486,36 +860,42 @@ export default function DataEntry() {
   const modelOptions = providers[config.provider]?.models ?? []
 
   /** 获取当前活跃行 */
-  const activeRow = useMemo(() => rows.find(r => r.id === activeRowId) ?? rows[0], [rows, activeRowId])
+  const activeRow = useMemo(
+    () => rows.find(r => r.id === activeRowId) ?? rows[0],
+    [rows, activeRowId],
+  )
 
-  const addImageFromFile = useCallback((file: File) => {
-    if (!file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      setImages(prev => [
-        ...prev,
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          url: String(reader.result),
-          name: file.name || `截图-${prev.length + 1}.png`,
-        },
-      ])
-    }
-    reader.readAsDataURL(file)
-  }, [])
+  const addImageFromFile = useCallback(
+    (file: File, platform: LiveControlPlatform) => {
+      if (!file.type.startsWith('image/')) return
+      const reader = new FileReader()
+      reader.onload = () => {
+        setImagesOf(platform, prev => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            url: String(reader.result),
+            name: file.name || `截图-${prev.length + 1}.png`,
+          },
+        ])
+      }
+      reader.readAsDataURL(file)
+    },
+    [setImagesOf],
+  )
 
   const addImageFiles = useCallback(
-    (files: FileList | File[]) => {
-      Array.from(files).forEach(f => addImageFromFile(f))
+    (files: FileList | File[], platform: LiveControlPlatform) => {
+      for (const f of Array.from(files)) addImageFromFile(f, platform)
     },
     [addImageFromFile],
   )
 
   const handleSelectFiles = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e: React.ChangeEvent<HTMLInputElement>, platform: LiveControlPlatform) => {
       const files = e.target.files
       if (!files) return
-      addImageFiles(files)
+      addImageFiles(files, platform)
       e.target.value = ''
     },
     [addImageFiles],
@@ -548,20 +928,21 @@ export default function DataEntry() {
   }, [])
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    (e: React.DragEvent, platform: LiveControlPlatform) => {
       e.preventDefault()
       e.stopPropagation()
       dragCounter.current = 0
       setIsDragging(false)
       const files = e.dataTransfer.files
       if (files && files.length > 0) {
-        addImageFiles(files)
+        addImageFiles(files, platform)
       }
     },
     [addImageFiles],
   )
 
-  const removeImage = (id: string) => setImages(prev => prev.filter(i => i.id !== id))
+  const removeImage = (platform: LiveControlPlatform, id: string) =>
+    setImagesOf(platform, prev => prev.filter(i => i.id !== id))
 
   // 支持从剪贴板粘贴截图（macOS 截屏后 Cmd+V / Windows Ctrl+V）
   useEffect(() => {
@@ -574,7 +955,7 @@ export default function DataEntry() {
           const file = item.getAsFile()
           if (file) {
             hasImage = true
-            addImageFromFile(file)
+            addImageFromFile(file, activeRow?.platform ?? 'douyin')
           }
         }
       })
@@ -582,53 +963,98 @@ export default function DataEntry() {
     }
     window.addEventListener('paste', onPaste)
     return () => window.removeEventListener('paste', onPaste)
-  }, [addImageFromFile])
+  }, [addImageFromFile, activeRow?.platform])
 
-  /** 识别 → 结果写入当前活跃行 */
-  const handleRecognize = useCallback(async () => {
-    if (images.length === 0) {
-      toast.error('请先选择截图')
-      return
-    }
-    if (!apiKey) {
-      toast.error('请先在上方填写视觉模型 API Key')
-      return
-    }
-    setRecognizing(true)
-    try {
-      const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.recognize, {
-        images: images.map(i => ({ base64: i.url })),
-        config: {
-          provider: config.provider,
-          model: config.model,
-          apiKey,
-          customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
-        },
-        columns,
-        templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
-      })
-      // 合并到当前活跃行
-      setRows(prev => prev.map(r => {
-        if (r.id !== activeRowId) return r
-        const merged = { ...r.values, ...result.values }
-        // 重算派生列
-        Object.assign(merged, computeDerivedValues(merged, columns))
-        return { ...r, values: merged, lowConfidence: result.lowConfidence ?? [] }
-      }))
-      const filled = Object.keys(result.values).length
-      toast.success(`识别完成，成功提取 ${filled} 项写入第 ${rows.findIndex(r => r.id === activeRowId) + 1} 行，请核对后导出`)
-    } catch (error) {
-      toast.error(`识别失败：${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      setRecognizing(false)
-    }
-  }, [images, apiKey, config.provider, config.model, customBaseURL, toast, activeRowId, rows, columns])
+  /** 识别 → 结果写入该平台当前活跃的那一行 */
+  const handleRecognize = useCallback(
+    async (platform: LiveControlPlatform) => {
+      const platformImages = imagesOf(platform)
+      const platformColumns = columns.filter(c => c.platform === platform)
+      // 该平台的活跃行：优先选中行，否则第一条该平台的行
+      const targetRow =
+        rows.find(r => r.id === activeRowId && r.platform === platform) ??
+        rows.find(r => r.platform === platform)
+      if (platformImages.length === 0) {
+        toast.error('请先选择截图')
+        return
+      }
+      if (platformColumns.length === 0) {
+        toast.error('这个平台还没有字段，请先点「管理列」添加')
+        return
+      }
+      if (!apiKey) {
+        toast.error('请先在上方填写视觉模型 API Key')
+        return
+      }
+      setRecognizing(true)
+      try {
+        const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.recognize, {
+          images: platformImages.map(i => ({ base64: i.url })),
+          config: {
+            provider: config.provider,
+            model: config.model,
+            apiKey,
+            customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
+          },
+          columns: platformColumns,
+          templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
+        })
+        // 合并到当前活跃行
+        setRows(prev =>
+          prev.map(r => {
+            if (r.id !== targetRow?.id) return r
+            const merged = { ...r.values, ...result.values }
+            // 按各列配置的「小数位」四舍五入（识别出来的原始值常常是长小数）
+            for (const c of platformColumns) {
+              if (c.decimals !== undefined && merged[c.key] !== undefined) {
+                merged[c.key] = roundByColumn(merged[c.key], c)
+              }
+            }
+            // 时间列补成「开始-结束」时间段
+            composeTimeRange(merged)
+            // 识别到日期时，自动补「周标签」
+            const recognizedWeek = merged.date ? weekdayLabel(merged.date) : null
+            if (recognizedWeek) merged.weekLabel = recognizedWeek
+            // 重算派生列
+            Object.assign(merged, computeDerivedValues(merged, platformColumns))
+            return { ...r, values: merged, lowConfidence: result.lowConfidence ?? [] }
+          }),
+        )
+        const filled = Object.keys(result.values).length
+        toast.success(
+          `识别完成，成功提取 ${filled} 项写入「${sectionLabel(platform)}」第 ${
+            rows.filter(r => r.platform === platform).findIndex(r => r.id === targetRow?.id) + 1
+          } 行，请核对后导出`,
+        )
+      } catch (error) {
+        toast.error(`识别失败：${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setRecognizing(false)
+      }
+    },
+    [
+      imagesOf,
+      apiKey,
+      config.provider,
+      config.model,
+      customBaseURL,
+      toast,
+      activeRowId,
+      rows,
+      columns,
+      template,
+      sectionLabel,
+    ],
+  )
 
   /** 加载已保存的模板 */
   useEffect(() => {
-    window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.getTemplate).then((tmpl: VisionTemplate | null) => {
-      if (tmpl) setTemplate({ id: tmpl.id, name: tmpl.name, fieldCount: tmpl.fields.length })
-    }).catch(() => {})
+    window.ipcRenderer
+      .invoke(IPC_CHANNELS.dataEntry.getTemplate)
+      .then((tmpl: VisionTemplate | null) => {
+        if (tmpl) setTemplate({ id: tmpl.id, name: tmpl.name, fieldCount: tmpl.fields.length })
+      })
+      .catch(() => {})
   }, [])
 
   /** 表单数据自动存档：任何修改（填字/识别/增删行/切换行）后防抖落盘，重启不再丢 */
@@ -642,52 +1068,62 @@ export default function DataEntry() {
     return () => clearTimeout(t)
   }, [rows, activeRowId])
 
-  /** 校准模板：用当前截图 + 当前行数据作为已知值 */
-  const handleCalibrate = useCallback(async () => {
-    if (images.length === 0) {
-      toast.error('请先上传一张标准截图')
-      return
-    }
-    if (!apiKey) {
-      toast.error('请先填写视觉模型 API Key')
-      return
-    }
-    // 用当前活跃行的非空数据作为已知值（至少需要几个有值的字段）
-    const activeRow = rows.find(r => r.id === activeRowId)
-    const knownValues: Record<string, string> = {}
-    if (activeRow) {
-      for (const [k, v] of Object.entries(activeRow.values)) {
-        if (v && v.trim() !== '') knownValues[k] = v.trim()
+  /** 校准模板：用该平台的第一张截图 + 该平台当前行数据作为已知值 */
+  const handleCalibrate = useCallback(
+    async (platform: LiveControlPlatform) => {
+      const platformImages = imagesOf(platform)
+      if (platformImages.length === 0) {
+        toast.error('请先上传一张标准截图')
+        return
       }
-    }
-    if (Object.keys(knownValues).length < 5) {
-      toast.error(`校准需要至少 5 个已填写的字段作为参考，当前只有 ${Object.keys(knownValues).length} 个。请先手动填几个关键字段（如时间、观看人数、GMV 等）`)
-      return
-    }
+      if (!apiKey) {
+        toast.error('请先填写视觉模型 API Key')
+        return
+      }
+      // 用当前活跃行的非空数据作为已知值（至少需要几个有值的字段）
+      const activeRow =
+        rows.find(r => r.id === activeRowId && r.platform === platform) ??
+        rows.find(r => r.platform === platform)
+      const knownValues: Record<string, string> = {}
+      if (activeRow) {
+        for (const [k, v] of Object.entries(activeRow.values)) {
+          if (v && v.trim() !== '') knownValues[k] = v.trim()
+        }
+      }
+      if (Object.keys(knownValues).length < 5) {
+        toast.error(
+          `校准需要至少 5 个已填写的字段作为参考，当前只有 ${Object.keys(knownValues).length} 个。请先手动填几个关键字段（如时间、观看人数、GMV 等）`,
+        )
+        return
+      }
 
-    setCalibrating(true)
-    try {
-      const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.calibrateTemplate, {
-        image: { base64: images[0].url }, // 用第一张图作为标准截图
-        config: {
-          provider: config.provider,
-          model: config.model,
-          apiKey,
-          customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
-        },
-        knownValues,
-      })
-      setTemplate({ id: result.id, name: result.name, fieldCount: result.fields.length })
-      toast.success(`模板校准完成！定位了 ${result.fields.length} 个字段位置。以后识别会自动使用此模板，准确度大幅提升。`)
-    } catch (error) {
-      toast.error(`校准失败：${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      setCalibrating(false)
-    }
-  }, [images, apiKey, config.provider, config.model, customBaseURL, toast, rows, activeRowId])
+      setCalibrating(true)
+      try {
+        const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.calibrateTemplate, {
+          image: { base64: platformImages[0].url }, // 用第一张图作为标准截图
+          config: {
+            provider: config.provider,
+            model: config.model,
+            apiKey,
+            customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
+          },
+          knownValues,
+        })
+        setTemplate({ id: result.id, name: result.name, fieldCount: result.fields.length })
+        toast.success(
+          `模板校准完成！定位了 ${result.fields.length} 个字段位置。以后识别会自动使用此模板，准确度大幅提升。`,
+        )
+      } catch (error) {
+        toast.error(`校准失败：${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setCalibrating(false)
+      }
+    },
+    [imagesOf, apiKey, config.provider, config.model, customBaseURL, toast, rows, activeRowId],
+  )
 
   /** 删除模板 */
-  const handleDeleteTemplate = useCallback(async () => {
+  const _handleDeleteTemplate = useCallback(async () => {
     try {
       await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.deleteTemplate)
       setTemplate(null)
@@ -698,89 +1134,408 @@ export default function DataEntry() {
   }, [toast])
 
   /** 更新某行的某个字段值 */
-  const updateCellValue = useCallback((rowId: string, key: string, val: string) => {
-    setRows(prev => prev.map(r => {
-      if (r.id !== rowId) return r
-      const next = { ...r.values, [key]: val }
-      // 改了基础列时即时重算派生列
-      if (COMPUTED_DEPENDENCY_KEYS.includes(key)) {
-        Object.assign(next, computeDerivedValues(next, columns))
-      }
-      return { ...r, values: next }
-    }))
-  }, [columns])
+  const updateCellValue = useCallback(
+    (rowId: string, key: string, val: string) => {
+      setRows(prev =>
+        prev.map(r => {
+          if (r.id !== rowId) return r
+          const next = { ...r.values, [key]: val }
+          // 改「直播时长」→ 自动把「时间」补成时间段。
+          // 注意：不在输入 time 时自动改写，否则用户刚打完 06:40 就被补成
+          // 06:40-09:30，没法继续输入结束时间。
+          if (key === 'durationHour') composeTimeRange(next)
+          // 改了日期 → 自动算「周标签」（周一~周日）
+          if (key === 'date') {
+            const label = weekdayLabel(val)
+            if (label) next.weekLabel = label
+          }
+          // 改了基础列时即时重算派生列
+          if (COMPUTED_DEPENDENCY_KEYS.includes(key)) {
+            Object.assign(next, computeDerivedValues(next, columns))
+          }
+          return { ...r, values: next }
+        }),
+      )
+    },
+    [columns],
+  )
 
-  /** 新增一行 */
-  const addRow = useCallback(() => {
-    const newRow = createRow(columns)
-    setRows(prev => [...prev, newRow])
-    setActiveRowId(newRow.id)
-  }, [columns])
+  /** 新增一行（归属指定平台，只带该平台自己的列） */
+  const addRow = useCallback(
+    (platform: LiveControlPlatform = 'douyin') => {
+      const newRow = createRow(
+        columns.filter(c => c.platform === platform),
+        platform,
+      )
+      setRows(prev => [...prev, newRow])
+      setActiveRowId(newRow.id)
+    },
+    [columns],
+  )
 
   /** 删除一行 */
-  const deleteRow = useCallback((rowId: string) => {
-    setRows(prev => {
-      if (prev.length <= 1) {
-        toast.error('至少保留一行数据')
-        return prev
-      }
-      const next = prev.filter(r => r.id !== rowId)
-      // 若删的是当前活跃行，切到第一行
-      if (activeRowId === rowId) {
-        setActiveRowId(next[0]?.id ?? '')
-      }
-      return next
-    })
-  }, [activeRowId, toast])
+  const deleteRow = useCallback(
+    (rowId: string) => {
+      setRows(prev => {
+        if (prev.length <= 1) {
+          toast.error('至少保留一行数据')
+          return prev
+        }
+        const next = prev.filter(r => r.id !== rowId)
+        // 若删的是当前活跃行，切到第一行
+        if (activeRowId === rowId) {
+          setActiveRowId(next[0]?.id ?? '')
+        }
+        return next
+      })
+    },
+    [activeRowId, toast],
+  )
 
   /** 保存列管理结果：对齐行数据 + 落盘 */
-  const handleSaveColumns = useCallback(async (newCols: LiveReportColumn[]) => {
-    setRows(prev => reconcileRows(prev, newCols))
-    setColumns(newCols)
-    setColumnModalOpen(false)
-    try {
-      await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveColumns, newCols)
-      toast.success(`列配置已保存（${newCols.length} 列），导出与识别已同步更新`)
-    } catch (error) {
-      toast.error(`保存列配置失败：${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [toast])
+  const handleSaveColumns = useCallback(
+    async (newCols: LiveReportColumn[]) => {
+      // 只替换「当前板块」的列，其它板块的字段原样保留
+      const withPlatform = newCols.map(c => ({ ...c, platform: columnModalPlatform }))
+      const merged = [...columns.filter(c => c.platform !== columnModalPlatform), ...withPlatform]
+      setRows(prev => reconcileRows(prev, merged))
+      setColumns(merged)
+      setColumnModalOpen(false)
+      try {
+        await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveColumns, merged)
+        toast.success(
+          `「${sectionLabel(columnModalPlatform)}」：已保存 ${withPlatform.length} 个字段`,
+        )
+      } catch (error) {
+        toast.error(`保存列配置失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
+    [toast, columns, columnModalPlatform, sectionLabel],
+  )
 
   /** 导出全部行为 CSV */
-  const handleExport = useCallback(async () => {
-    const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
-    if (!outputPath) return
-    try {
-      const convertedRows = rows.map(row => {
-        const converted: Record<string, string> = {}
-        for (const c of columns) {
-          converted[c.key] = convertColumnValue(c, row.values[c.key] ?? '')
-        }
-        return converted
-      })
-      const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportExcel, {
-        rows: convertedRows,
-        outputPath,
-        columns,
-      })
-      toast.success(`已导出 ${rows.length} 行数据：${saved}`)
-    } catch (error) {
-      toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [rows, columns, toast])
+  /**
+   * 删除板块（用户 2026-11-05：每个板块可删除，但至少保留一个）。
+   * - 第一个板块不提供删除入口
+   * - 板块里还有数据行时，把这些行**并入第一个板块**，不删数据
+   */
+  const removeSection = useCallback(
+    (pf: string) => {
+      const owner = sectionPlatforms[0]
+      if (!owner || owner === pf) return // 第一个板块不让删
+      const movingRows = rows.filter(r => (r.platform as string) === pf).length
+      const movingCols = columns.filter(c => (c.platform as string) === pf).length
+      setSectionPlatforms(prev => prev.filter(p => p !== pf))
+      if (movingRows > 0) {
+        setRows(prev =>
+          prev.map(r =>
+            (r.platform as string) === pf ? { ...r, platform: owner as LiveControlPlatform } : r,
+          ),
+        )
+      }
+      if (movingCols > 0) {
+        setColumns(prev => {
+          // 只把「第一个板块还没有的字段」并进去，同 key 的丢弃，避免重复
+          const ownerKeys = new Set(
+            prev.filter(c => (c.platform as string) === owner).map(c => c.key as string),
+          )
+          const kept = prev.filter(c => (c.platform as string) !== pf)
+          const adopted = prev
+            .filter(c => (c.platform as string) === pf && !ownerKeys.has(c.key))
+            .map(c => ({ ...c, platform: owner as LiveControlPlatform }))
+          const next = dedupeColumns([...kept, ...adopted])
+          void window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveColumns, next)
+          return next
+        })
+      }
+      toast.success(
+        movingRows > 0 || movingCols > 0
+          ? `已删除板块，${movingRows} 行数据、${movingCols} 个字段已并入第一个板块`
+          : '已删除板块',
+      )
+    },
+    [sectionPlatforms, rows, columns, toast],
+  )
+
+  /** 导出该平台的行（只用该平台自己的列） */
+  const handleExport = useCallback(
+    async (platform: LiveControlPlatform) => {
+      const platformColumns = columns.filter(c => c.platform === platform)
+      const platformRows = rows.filter(r => r.platform === platform)
+      if (platformRows.length === 0) {
+        toast.error('这个平台还没有数据')
+        return
+      }
+      const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
+      if (!outputPath) return
+      try {
+        const convertedRows = platformRows.map(row => {
+          const converted: Record<string, string> = {}
+          for (const c of platformColumns) {
+            converted[c.key] = convertColumnValue(c, row.values[c.key] ?? '')
+          }
+          return converted
+        })
+        const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportExcel, {
+          rows: convertedRows,
+          outputPath,
+          columns: platformColumns,
+        })
+        toast.success(`已导出${platformLabels[platform]} ${platformRows.length} 行：${saved}`)
+      } catch (error) {
+        toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
+    [rows, columns, toast],
+  )
 
   return (
     <div className="container py-8 space-y-6 max-w-6xl">
       <Title title="直播日报" description="下播后：拖入截图 → 视觉识别 → 核对 → 导出本地 CSV" />
 
+      {/* 按平台分板块：每个板块自带「截图识别 + 数据行」，板块与当前账号无关 */}
+      {sectionPlatforms.map(pf => {
+        // 板块 key 是字符串，平台枚举只在取平台名/默认字段时用
+        const pk = pf as LiveControlPlatform
+        const pfColumns = columns.filter(c => (c.platform as string) === pf)
+        const pfRows = rows.filter(r => (r.platform as string) === pf)
+        const pfImages = imagesOf(pk)
+        const pfActiveIndex = pfRows.findIndex(r => r.id === activeRowId)
+        return (
+          <Card key={pf}>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Input
+                      value={
+                        sectionNames[pf] ?? platformLabels[pf as LiveControlPlatform] ?? '新板块'
+                      }
+                      onChange={e => setSectionName(pf, e.target.value)}
+                      className="h-7 w-[180px] px-2 text-base font-semibold"
+                      placeholder="板块名称"
+                      title="点这里可以改板块名称"
+                    />
+                    <span className="text-sm font-normal text-muted-foreground">
+                      （{pfRows.length} 行）
+                    </span>
+                  </CardTitle>
+                  <CardDescription>
+                    截图识别与数据记录都属于这个板块；识别结果写入当前选中行（蓝圈）
+                  </CardDescription>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setColumnModalPlatform(pk)
+                      setColumnModalOpen(true)
+                    }}
+                  >
+                    <Settings2 className="w-4 h-4 mr-1" /> 管理列
+                  </Button>
+                  <Button size="sm" onClick={() => addRow(pk)}>
+                    <Plus className="w-4 h-4 mr-1" /> 新增一行
+                  </Button>
+                  {/* 第一个板块是「主板块」，不提供删除入口；其余板块可删，
+                      板块内数据会并入第一个板块，不会丢 */}
+                  {sectionPlatforms[0] !== pf && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="px-2 text-muted-foreground hover:text-destructive"
+                      title="删除这个板块（里面的数据会并入第一个板块）"
+                      onClick={() => removeSection(pf)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖拽放置区，键盘不适用 */}
+              <div
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={e => handleDrop(e, pk)}
+                className={`relative rounded-lg border-2 border-dashed p-2 transition-colors ${
+                  isDragging ? 'border-primary bg-primary/5' : 'border-border/60'
+                }`}
+              >
+                {isDragging && (
+                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/5">
+                    <p className="text-sm font-medium text-primary">
+                      松开鼠标，把图片加入「{sectionLabel(pf)}」的识别列表
+                    </p>
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={() => fileInputs.current[pk]?.click()}>
+                    选择截图
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleRecognize(pk)}
+                    disabled={recognizing || pfImages.length === 0}
+                  >
+                    {recognizing
+                      ? '识别中...'
+                      : `开始识别 → 写入第 ${pfActiveIndex >= 0 ? pfActiveIndex + 1 : 1} 行`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={template ? 'secondary' : 'outline'}
+                    onClick={() => handleCalibrate(pk)}
+                    disabled={calibrating || pfImages.length === 0}
+                  >
+                    <MapPin className="w-3.5 h-3.5 mr-1" />
+                    {calibrating
+                      ? '校准中...'
+                      : template
+                        ? `已校准(${template.fieldCount}字段)`
+                        : '校准模板'}
+                  </Button>
+                  <input
+                    ref={el => {
+                      fileInputs.current[pk] = el
+                    }}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={e => handleSelectFiles(e, pk)}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    支持拖拽 / ⌘V 粘贴；可多选整屏、流量、商品、人群
+                  </span>
+                </div>
+
+                {pfImages.length > 0 && (
+                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+                    {pfImages.map(img => (
+                      <div
+                        key={img.id}
+                        className="group relative overflow-hidden rounded-md border"
+                      >
+                        <img src={img.url} alt={img.name} className="h-16 w-full object-cover" />
+                        <div className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 opacity-0 transition group-hover:opacity-100">
+                          <button
+                            type="button"
+                            className="rounded bg-primary px-1.5 py-0.5 text-[10px] text-white"
+                            onClick={() => setCropTarget(img)}
+                          >
+                            裁剪
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded bg-destructive px-1.5 py-0.5 text-[10px] text-white"
+                            onClick={() => removeImage(pk, img.id)}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {pfRows.length === 0 ? (
+                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                  这个板块还没有数据行，点右上角「新增一行」开始
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  {pfRows.map((row, idx) => (
+                    <RowCard
+                      key={row.id}
+                      row={row}
+                      rowIndex={idx}
+                      rowCount={pfRows.length}
+                      isActive={row.id === activeRowId}
+                      columns={pfColumns}
+                      onSelect={() => setActiveRowId(row.id)}
+                      onUpdateValues={updateCellValue}
+                      onDelete={deleteRow}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 border-t pt-3">
+                <Button size="sm" onClick={() => handleExport(pk)}>
+                  <Table className="w-4 h-4 mr-1" /> 导出「{sectionLabel(pf)}」 {pfRows.length} 行
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    const outputPath = await window.ipcRenderer.invoke(
+                      IPC_CHANNELS.dataEntry.selectOutputPath,
+                    )
+                    if (!outputPath) return
+                    try {
+                      const saved = await window.ipcRenderer.invoke(
+                        IPC_CHANNELS.dataEntry.generateTemplate,
+                        { outputPath, columns: pfColumns },
+                      )
+                      toast.success(`已生成模板：${saved}`)
+                    } catch (error) {
+                      toast.error(
+                        `生成失败：${error instanceof Error ? error.message : String(error)}`,
+                      )
+                    }
+                  }}
+                >
+                  生成空白模板
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })}
+
+      {/* 新建板块：板块与平台解耦，新建后自己改名、从别的板块导入字段 */}
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-2 py-3">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const key = `custom-${Date.now().toString(36)}`
+              setSectionPlatforms(prev => [...prev, key])
+              setSectionNames(prev => {
+                const next = { ...prev, [key]: `新板块 ${Object.keys(prev).length + 1}` }
+                try {
+                  localStorage.setItem('data-entry-section-names', JSON.stringify(next))
+                } catch {
+                  // 忽略
+                }
+                return next
+              })
+            }}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" /> 新建板块
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            新建后点标题改名，再点「管理列 → 导入字段」从其它板块复制模板
+          </span>
+        </CardContent>
+      </Card>
+
       {/* 视觉模型配置 */}
       <Card>
         <CardHeader>
-          <CardTitle>视觉识别模型</CardTitle>
+          <CardTitle className="text-sm font-medium">视觉识别模型</CardTitle>
+          <CardDescription className="text-xs">截图识别用的模型，填过一次就会记住</CardDescription>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="space-y-2">
-            <Label>服务商</Label>
+            <Label className="text-[11px] text-muted-foreground">服务商</Label>
             <Select
               value={config.provider}
               onValueChange={p => {
@@ -802,7 +1557,7 @@ export default function DataEntry() {
           </div>
 
           <div className="space-y-2">
-            <Label>模型</Label>
+            <Label className="text-[11px] text-muted-foreground">模型</Label>
             {modelOptions.length > 0 ? (
               <Select value={config.model} onValueChange={m => setConfig({ model: m })}>
                 <SelectTrigger>
@@ -826,7 +1581,7 @@ export default function DataEntry() {
           </div>
 
           <div className="space-y-2">
-            <Label>API Key</Label>
+            <Label className="text-[11px] text-muted-foreground">API Key</Label>
             <Input
               type="password"
               value={apiKey}
@@ -837,7 +1592,7 @@ export default function DataEntry() {
 
           {config.provider === 'custom' && (
             <div className="space-y-2">
-              <Label>API 地址</Label>
+              <Label className="text-[11px] text-muted-foreground">API 地址</Label>
               <Input
                 value={customBaseURL}
                 onChange={e => setCustomBaseURL(e.target.value)}
@@ -848,183 +1603,16 @@ export default function DataEntry() {
         </CardContent>
       </Card>
 
-      {/* 截图区 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>直播数据截图</CardTitle>
-          <CardDescription>
-            可多选：整张大屏、复盘页、流量来源、商品、人群画像等。也可直接把图片
-            <strong className="text-foreground"> 拖拽到下方区域</strong>，或{' '}
-            <kbd className="px-1 py-0.5 rounded bg-muted text-xs">⌘/Ctrl + V</kbd>{' '}
-            粘贴剪贴板里的截图；支持「框选裁剪」只识别某块区域。
-            识别结果将写入当前选中的行（带蓝色圆圈标记的）。
-            {template && (
-              <span className="text-success font-medium"> 已启用视觉模板（{template.fieldCount} 个字段已定位），识别准确度更高。</span>
-            )}
-            {!template && (
-              <span className="text-warning"> 首次使用建议先点「校准模板」提升准确度。</span>
-            )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* 拖拽放置区 */}
-          <div
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            className={`relative rounded-lg border-2 border-dashed transition-colors ${
-              isDragging ? 'border-primary bg-primary/5' : 'border-transparent'
-            }`}
-          >
-            {isDragging && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/5 rounded-lg pointer-events-none">
-                <p className="text-sm font-medium text-primary">松开鼠标，把图片加入识别列表</p>
-              </div>
-            )}
-            <div className="flex flex-wrap gap-3 p-1">
-              <Button onClick={() => fileInputRef.current?.click()}>
-                选择截图
-              </Button>
-              <Button variant="outline" onClick={handleRecognize} disabled={recognizing || images.length === 0}>
-                {recognizing ? '识别中...' : `开始识别 → 写入第 ${rows.findIndex(r => r.id === activeRowId) + 1} 行`}
-                {template && (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] bg-success/10 text-success px-1.5 py-0.5 rounded">
-                    <MapPin className="w-2.5 h-2.5" />模板
-                  </span>
-                )}
-              </Button>
-              <Button
-                variant={template ? 'secondary' : 'default'}
-                size="sm"
-                onClick={handleCalibrate}
-                disabled={calibrating || images.length === 0}
-              >
-                <MapPin className="w-3.5 h-3.5 mr-1" />
-                {calibrating ? '校准中...' : template ? `已校准(${template.fieldCount}字段)` : '校准模板'}
-              </Button>
-              {template && (
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground hover:text-destructive self-center"
-                  onClick={handleDeleteTemplate}
-                  title="删除视觉模板"
-                >
-                  删除模板
-                </button>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleSelectFiles}
-              />
-              <span className="self-center text-xs text-muted-foreground hidden sm:inline">
-                也可以直接把图片拖拽到这里，或从文件管理器拖入
-              </span>
-            </div>
-
-            {images.length > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-1">
-                {images.map(img => (
-                  <div key={img.id} className="relative group border rounded-md overflow-hidden">
-                    <img src={img.url} alt={img.name} className="w-full h-32 object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        className="text-xs text-white bg-primary px-2 py-1 rounded"
-                        onClick={() => setCropTarget(img)}
-                      >
-                        裁剪
-                      </button>
-                      <button
-                        type="button"
-                        className="text-xs text-white bg-destructive px-2 py-1 rounded"
-                        onClick={() => removeImage(img.id)}
-                      >
-                        删除
-                      </button>
-                    </div>
-                    <p className="text-[10px] truncate px-1 py-0.5 text-muted-foreground">{img.name}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 多行数据管理 */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>数据记录（{rows.length} 行）</CardTitle>
-              <CardDescription>
-                点击圆圈选择当前行（识别结果写入该行）；点击行展开编辑字段；每行代表一场直播的数据
-              </CardDescription>
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => setColumnModalOpen(true)}>
-                <Settings2 className="w-4 h-4 mr-1" /> 管理列
-              </Button>
-              <Button size="sm" onClick={addRow}>
-                <Plus className="w-4 h-4 mr-1" /> 新增一行
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {rows.map((row, idx) => (
-            <RowCard
-              key={row.id}
-              row={row}
-              rowIndex={idx}
-              rowCount={rows.length}
-              isActive={row.id === activeRowId}
-              columns={columns}
-              onSelect={() => setActiveRowId(row.id)}
-              onUpdateValues={updateCellValue}
-              onDelete={deleteRow}
-            />
-          ))}
-
-          <div className="flex flex-wrap gap-3 pt-4 border-t mt-4">
-            <Button onClick={handleExport}>
-              <Table className="w-4 h-4 mr-1" /> 导出全部 {rows.length} 行为 CSV
-            </Button>
-            <Button
-              variant="outline"
-              onClick={async () => {
-                const outputPath = await window.ipcRenderer.invoke(
-                  IPC_CHANNELS.dataEntry.selectOutputPath,
-                )
-                if (!outputPath) return
-                try {
-                  const saved = await window.ipcRenderer.invoke(
-                    IPC_CHANNELS.dataEntry.generateTemplate,
-                    { outputPath, columns },
-                  )
-                  toast.success(`已生成模板：${saved}`)
-                } catch (error) {
-                  toast.error(`生成失败：${error instanceof Error ? error.message : String(error)}`)
-                }
-              }}
-            >
-              生成空白模板
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
       {cropTarget && (
         <CropModal
           image={cropTarget}
           onCancel={() => setCropTarget(null)}
           onConfirm={dataUrl => {
-            setImages(prev => [
+            // 裁剪结果加回「原图所属平台」的列表
+            const owner = (Object.keys(imagesByPlatform) as LiveControlPlatform[]).find(pf =>
+              (imagesByPlatform[pf] ?? []).some(i => i.id === cropTarget.id),
+            )
+            setImagesOf(owner ?? 'douyin', prev => [
               ...prev,
               {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1039,7 +1627,10 @@ export default function DataEntry() {
 
       {columnModalOpen && (
         <ColumnManagerModal
-          columns={columns}
+          columns={columns.filter(c => c.platform === columnModalPlatform)}
+          allColumns={columns}
+          platform={columnModalPlatform}
+          labelOf={sectionLabel}
           onCancel={() => setColumnModalOpen(false)}
           onSave={handleSaveColumns}
         />

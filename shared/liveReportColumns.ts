@@ -6,6 +6,11 @@
 export type ColumnUnit = 'none' | 'wan' | 'hour' | 'percent' | 'text'
 
 export interface LiveReportColumn {
+  /**
+   * 归属平台。每个平台有自己独立的一套列（字段各不相同），
+   * 数据行也按平台归属，页面上按平台分区展示、不用来回切换。
+   */
+  platform: LiveControlPlatform
   /** 稳定内部键（用于映射到飞书列 / 内部存储） */
   key: string
   /** 飞书表列头（视觉识别提示词与导出表头都使用此名） */
@@ -16,9 +21,22 @@ export interface LiveReportColumn {
   source: 'manual' | 'vision' | 'skip' | 'computed'
   /** UI 分组 */
   group: string
+  /**
+   * 保留几位小数（四舍五入）。不填 = 不做处理，保留原始值。
+   * 每个字段可单独设置：ROI 要 2 位、观看人数要 0 位、UV 价值 2 位…
+   * （用户 2026-11-05 要求「可以自定义字段四舍五入」）
+   */
+  decimals?: number
 }
 
-export const LIVE_REPORT_COLUMNS: LiveReportColumn[] = [
+/**
+ * 内置默认列。
+ *
+ * 这批字段来自抖音（罗盘大屏），所以整体标记为 `douyin`；
+ * 其它平台（快手 / 视频号 / 小红书 / 淘宝）默认没有任何列，
+ * 由用户在「管理列」里各自添加。
+ */
+const BUILTIN_COLUMNS: Array<Omit<LiveReportColumn, 'platform'>> = [
   // 基础信息（人工填写）
   { key: 'weekLabel', label: '周标签', unit: 'text', source: 'manual', group: '基础信息' },
   { key: 'anchorName', label: '主播名称', unit: 'text', source: 'manual', group: '基础信息' },
@@ -34,17 +52,43 @@ export const LIVE_REPORT_COLUMNS: LiveReportColumn[] = [
   { key: 'followWan', label: '关注用户数（w）', unit: 'wan', source: 'skip', group: '流量' },
   { key: 'exposeUsersWan', label: '曝光人数（w）', unit: 'wan', source: 'vision', group: '流量' },
   { key: 'exposeTimesWan', label: '曝光次数（w）', unit: 'wan', source: 'vision', group: '流量' },
-  { key: 'exposeViewRate', label: '曝光观看率（次数）', unit: 'none', source: 'vision', group: '流量' },
-  { key: 'viewInteractRate', label: '观看互动率（人数）', unit: 'none', source: 'vision', group: '流量' },
+  {
+    key: 'exposeViewRate',
+    label: '曝光观看率（次数）',
+    unit: 'none',
+    source: 'vision',
+    group: '流量',
+  },
+  {
+    key: 'viewInteractRate',
+    label: '观看互动率（人数）',
+    unit: 'none',
+    source: 'vision',
+    group: '流量',
+  },
   { key: 'peakOnline', label: '最高在线人数', unit: 'none', source: 'vision', group: '流量' },
   { key: 'avgOnline', label: '平均在线人数', unit: 'none', source: 'vision', group: '流量' },
   { key: 'fansRatio', label: '粉丝占比', unit: 'percent', source: 'vision', group: '流量' },
   { key: 'newFans', label: '新增粉丝数', unit: 'none', source: 'vision', group: '流量' },
   { key: 'fanConvertRate', label: '转粉率', unit: 'percent', source: 'vision', group: '流量' },
   { key: 'fansGroupNew', label: '粉丝团新增人数', unit: 'none', source: 'vision', group: '流量' },
-  { key: 'joinGroupRate', label: '加团率', unit: 'percent', source: 'computed', group: '流量' },
+  {
+    key: 'joinGroupRate',
+    label: '加团率',
+    unit: 'percent',
+    source: 'computed',
+    group: '流量',
+    decimals: 2,
+  },
   { key: 'comments', label: '评论数', unit: 'none', source: 'vision', group: '流量' },
-  { key: 'avgCommentsPerMin', label: '平均评论次数(分)', unit: 'none', source: 'computed', group: '流量' },
+  {
+    key: 'avgCommentsPerMin',
+    label: '平均评论次数(分)',
+    unit: 'none',
+    source: 'computed',
+    group: '流量',
+    decimals: 2,
+  },
   { key: 'likesWan', label: '点赞量（w）', unit: 'wan', source: 'vision', group: '流量' },
   { key: 'avgStayDuration', label: '平均停留时长', unit: 'hour', source: 'vision', group: '流量' },
 
@@ -57,34 +101,102 @@ export const LIVE_REPORT_COLUMNS: LiveReportColumn[] = [
   { key: 'srcPay', label: '付费', unit: 'none', source: 'vision', group: '成交' },
   { key: 'srcOther', label: '其他', unit: 'none', source: 'vision', group: '成交' },
   { key: 'srcSearch', label: '搜索', unit: 'none', source: 'vision', group: '成交' },
-  { key: 'peerMedianExposeTimes', label: '同层中位数曝光次数', unit: 'none', source: 'vision', group: '成交' },
-  { key: 'peerMedianExposeViewRate', label: '同层中位数曝光观看率', unit: 'percent', source: 'vision', group: '成交' },
-  { key: 'peerMedianThousand', label: '同层中位千次', unit: 'none', source: 'vision', group: '成交' },
+  {
+    key: 'peerMedianExposeTimes',
+    label: '同层中位数曝光次数',
+    unit: 'none',
+    source: 'vision',
+    group: '成交',
+  },
+  {
+    key: 'peerMedianExposeViewRate',
+    label: '同层中位数曝光观看率',
+    unit: 'percent',
+    source: 'vision',
+    group: '成交',
+  },
+  {
+    key: 'peerMedianThousand',
+    label: '同层中位千次',
+    unit: 'none',
+    source: 'vision',
+    group: '成交',
+  },
   { key: 'payGmv', label: '支付GMV', unit: 'none', source: 'vision', group: '成交' },
   { key: 'gpm', label: 'GPM', unit: 'none', source: 'vision', group: '成交' },
   { key: 'payUsers', label: '成交人数', unit: 'none', source: 'vision', group: '成交' },
-  { key: 'uvValue', label: 'UV价值', unit: 'none', source: 'computed', group: '成交' },
+  { key: 'uvValue', label: 'UV价值', unit: 'none', source: 'computed', group: '成交', decimals: 2 },
   { key: 'investAmount', label: '投放金额', unit: 'none', source: 'vision', group: '成交' },
-  { key: 'roi', label: '整场ROI', unit: 'none', source: 'computed', group: '成交' },
-  { key: 'videoDealRatio', label: '视频成交占比', unit: 'percent', source: 'vision', group: '成交' },
+  { key: 'roi', label: '整场ROI', unit: 'none', source: 'computed', group: '成交', decimals: 2 },
+  {
+    key: 'videoDealRatio',
+    label: '视频成交占比',
+    unit: 'percent',
+    source: 'vision',
+    group: '成交',
+  },
   { key: 'refundAmount', label: '下播退货金额', unit: 'none', source: 'vision', group: '成交' },
-  { key: 'preShipRefundRate', label: '发货前退款率', unit: 'percent', source: 'vision', group: '成交' },
+  {
+    key: 'preShipRefundRate',
+    label: '发货前退款率',
+    unit: 'percent',
+    source: 'vision',
+    group: '成交',
+  },
 
   // 商品 / 人群
   { key: 'mainProduct', label: '主品', unit: 'text', source: 'manual', group: '商品人群' },
-  { key: 'productExposeClick', label: '商品曝光点击', unit: 'none', source: 'vision', group: '商品人群' },
-  { key: 'productClickDeal', label: '商品点击成交', unit: 'none', source: 'vision', group: '商品人群' },
+  {
+    key: 'productExposeClick',
+    label: '商品曝光点击',
+    unit: 'none',
+    source: 'vision',
+    group: '商品人群',
+  },
+  {
+    key: 'productClickDeal',
+    label: '商品点击成交',
+    unit: 'none',
+    source: 'vision',
+    group: '商品人群',
+  },
   { key: 'clothingColor', label: '服装颜色', unit: 'text', source: 'manual', group: '商品人群' },
-  { key: 'age50PlusRatio', label: '50+占比（观看）', unit: 'percent', source: 'vision', group: '商品人群' },
-  { key: 'maleFansRatio', label: '男粉占比（观看）', unit: 'percent', source: 'vision', group: '商品人群' },
+  {
+    key: 'age50PlusRatio',
+    label: '50+占比（观看）',
+    unit: 'percent',
+    source: 'vision',
+    group: '商品人群',
+  },
+  {
+    key: 'maleFansRatio',
+    label: '男粉占比（观看）',
+    unit: 'percent',
+    source: 'vision',
+    group: '商品人群',
+  },
   { key: 'viewCoreCity', label: '观看核心城市', unit: 'text', source: 'vision', group: '商品人群' },
   { key: 'dealCoreCity', label: '成交核心城市', unit: 'text', source: 'vision', group: '商品人群' },
 ]
+
+export const LIVE_REPORT_COLUMNS: LiveReportColumn[] = BUILTIN_COLUMNS.map(c => ({
+  ...c,
+  platform: 'douyin' as const,
+}))
 
 /** 非抖音字段（需人工填写，视觉识别不应覆盖） */
 export const MANUAL_COLUMN_KEYS = LIVE_REPORT_COLUMNS.filter(c => c.source === 'manual').map(
   c => c.key,
 )
+
+/** 按列配置四舍五入到指定小数位；没配置或不是数字就原样返回 */
+export function roundByColumn(value: string, column: LiveReportColumn): string {
+  const digits = column.decimals
+  if (digits === undefined || digits === null) return value
+  const num = Number.parseFloat(String(value).replace(/[^\d.-]/g, ''))
+  if (Number.isNaN(num)) return value
+  return String(+num.toFixed(digits))
+}
 
 /** 把视觉识别到的原文按列单位转换成可写入的数值/文本 */
 export function convertColumnValue(column: LiveReportColumn, raw: string): string {
@@ -118,8 +230,8 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
     const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
     return Number.isNaN(num) ? text : String(num)
   }
-  // none：保留原文（通常为数字）
-  return text
+  // none：保留原文（通常为数字），但按列配置四舍五入
+  return roundByColumn(text, column)
 }
 
 /** 派生计算列所依赖的基础列 key（改这些列时触发重算） */
@@ -170,17 +282,21 @@ export function computeDerivedValues(
   const durationH = toNumber(raw['durationHour'] ?? '')
   const fansGroup = actualCount(raw, 'fansGroupNew', columns)
 
+  // 派生列按「该列配置的小数位」四舍五入（没配就默认 2 位）
+  const digitsOf = (key: string) => columns.find(c => c.key === key)?.decimals ?? 2
   if (gmv !== null && invest !== null && invest !== 0) {
-    out['roi'] = String(+(gmv / invest).toFixed(4))
+    out['roi'] = String(+(gmv / invest).toFixed(digitsOf('roi')))
   }
   if (comments !== null && durationH !== null && durationH > 0) {
-    out['avgCommentsPerMin'] = String(+(comments / (durationH * 60)).toFixed(4))
+    out['avgCommentsPerMin'] = String(
+      +(comments / (durationH * 60)).toFixed(digitsOf('avgCommentsPerMin')),
+    )
   }
   if (gmv !== null && viewers !== null && viewers !== 0) {
-    out['uvValue'] = String(+(gmv / viewers).toFixed(4))
+    out['uvValue'] = String(+(gmv / viewers).toFixed(digitsOf('uvValue')))
   }
   if (fansGroup !== null && viewers !== null && viewers !== 0) {
-    out['joinGroupRate'] = String(+(fansGroup / viewers * 100).toFixed(2))
+    out['joinGroupRate'] = String(+((fansGroup / viewers) * 100).toFixed(digitsOf('joinGroupRate')))
   }
   return out
 }

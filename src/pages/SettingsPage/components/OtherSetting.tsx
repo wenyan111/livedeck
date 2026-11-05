@@ -91,6 +91,25 @@ export function OtherSetting() {
             </div>
           </div>
         </div>
+
+        {/* 版权与出处：上游 oba-live-tool 与 electron-vite-react 均为 MIT，
+            MIT 要求在分发的副本中保留版权声明，放在设置页最底部明示。 */}
+        <div className="mt-6 space-y-1 border-t border-border/60 pt-4">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            基于{' '}
+            <a
+              className="text-foreground/80 underline underline-offset-2"
+              href="https://github.com/qiutongxue/oba-live-tool"
+              target="_blank"
+              rel="noreferrer"
+            >
+              oba-live-tool
+            </a>{' '}
+            二次开发（MIT License，Copyright © 2025 qiutongxue）；界面模板来自 electron-vite-react
+            （MIT License，Copyright © 2023 草鞋没号）。
+          </p>
+          <p className="text-xs text-muted-foreground">Copyright © 2025-2026 wenyan111</p>
+        </div>
       </CardContent>
     </Card>
   )

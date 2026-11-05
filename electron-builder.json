@@ -41,5 +41,11 @@
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false,
     "differentialPackage": true
-  }
+  },
+  "extraResources": [
+    {
+      "from": "LICENSE",
+      "to": "LICENSE.txt"
+    }
+  ]
 }

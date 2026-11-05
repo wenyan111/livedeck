@@ -44,18 +44,23 @@ export function MentionReplySetting() {
 
       {needsForegroundHint && (
         <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-xs leading-relaxed">
-          <b className="text-warning">
-            {platform === 'kuaishou' ? '快手' : '视频号'}使用建议（影响准确率与速度）
-          </b>
-          <div className="mt-1 text-muted-foreground">
-            这两个平台的评论列表<b>不会自动把最新评论渲染出来</b>，列表还会随直播不断累积。
-            为保证「@ 回复」的准确率和回复速度，建议：
-            <br />① 每隔一段时间<b>刷新一次该平台的浏览器页面</b>；
-            <br />② 或把这个平台的浏览器窗口<b>放在最前面（主页面）</b>，不要一直压在后台。
-            <br />
-            长时间不刷新、又压在后台时，可能出现「找不到目标评论」而降级为纯文本
-            @（回复照常发出，只是对方收不到「被回复」的提醒）。
-          </div>
+          <b className="text-warning">{platform === 'kuaishou' ? '快手' : '视频号'}使用建议</b>
+          <ul className="mt-1.5 space-y-1 text-muted-foreground">
+            <li>
+              · <b>定期刷新页面</b>，或把浏览器窗口放在最前。压在后台会出现「找不到目标评论」，
+              自动降级为纯文本 @。
+            </li>
+            <li>
+              · 看到「评论列表未命中」提醒（Dock 跳 + 角标「!」／Windows 任务栏闪烁）时：
+              <b>刷新页面</b>，或把公屏<b>滚到最新</b>。
+            </li>
+            {platform === 'kuaishou' && (
+              <li>
+                · 同一条评论<b>只能 @ 一次</b>。请关闭快手后台的<b>「关键词回复」</b>
+                ，否则两边会抢着回同一条评论。
+              </li>
+            )}
+          </ul>
         </div>
       )}
     </div>

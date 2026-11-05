@@ -28,6 +28,7 @@ import { useLogCollector } from './hooks/useLogs'
 import { useOpenPriceLinkageGlobal } from './hooks/useOpenPriceLinkage'
 import { useOpenPriceScriptStore, useOpenPriceStatusSync } from './hooks/useOpenPriceScript'
 import { markDisconnectedTasks, useQuickStartAutoStart } from './hooks/useQuickStart'
+import { useStreamEndWatcher } from './hooks/useStreamEndWatcher'
 import { useToast } from './hooks/useToast'
 import { useUpdateConfigStore, useUpdateStore } from './hooks/useUpdate'
 import { pruneOrphanData } from './utils/configSync'
@@ -145,6 +146,8 @@ function App() {
 
   // 日志收集常驻：面板收起时也要继续累积，否则展开后是空的
   useLogCollector()
+  // 断播自动断开：3 分钟内同平台失败多次就断开该平台（淘宝除外）
+  useStreamEndWatcher()
   useGlobalIpcListener()
   // 跨平台开价联动需要在任意页面都能响应，因此挂在这里常驻
   useOpenPriceLinkageGlobal()

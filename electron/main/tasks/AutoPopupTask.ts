@@ -88,6 +88,18 @@ export function createAutoPopupTask(
 
   const intervalTask = intervalTaskResult.value
 
+  /**
+   * 连续失败计数。
+   *
+   * 下播后中控台的商品列表会消失，每一轮都是「找不到元素 商品列表」。
+   * 原来每轮刷 3 条 WARN + 1 条 ERROR，一场播下来几百条，日志根本没法看。
+   * 现在：前 3 轮照常提示（真出问题时能看到），之后只提示一次，
+   * 再往后就静默重试 —— 任务不中断，开播后第一次成功会自动恢复提示。
+   */
+  let consecutiveFailures = 0
+  let quietNotified = false
+  const QUIET_AFTER = 3
+
   async function execute(signal: AbortSignal) {
     const next = getNext()
     // 更新当前执行项的间隔
@@ -100,6 +112,11 @@ export function createAutoPopupTask(
         }
         const result = await platform.performPopup(next.id, signal)
         if (Result.isSuccess(result)) {
+          if (consecutiveFailures > QUIET_AFTER) {
+            logger.info(`弹窗已恢复（此前连续失败 ${consecutiveFailures} 轮）`)
+          }
+          consecutiveFailures = 0
+          quietNotified = false
           logger.success(`商品 ${next.id} 弹窗成功`)
         }
         return result
@@ -117,7 +134,16 @@ export function createAutoPopupTask(
     // 单轮失败不再中断整个任务：记一条警告、跳过本轮，下一个间隔到点继续试。
     // 否则一次「找不到/点不动」就会让自动弹窗永久停掉，需要人工重新开启。
     if (Result.isFailure(result) && isRecoverablePopupError(result.error)) {
-      logger.warn(`商品 ${next.id} 本轮弹窗失败，已跳过本轮，稍后继续重试：`, result.error)
+      consecutiveFailures++
+      if (consecutiveFailures <= QUIET_AFTER) {
+        logger.warn(`商品 ${next.id} 本轮弹窗失败，已跳过本轮，稍后继续重试：`, result.error)
+      } else if (!quietNotified) {
+        // 只提示一次：多半是已经下播（中控台里没有商品列表了）
+        quietNotified = true
+        logger.info(
+          `已连续 ${consecutiveFailures} 轮找不到商品，判断为已下播或页面已变，后续不再逐轮提示（任务仍在后台重试，开播后会自动恢复）`,
+        )
+      }
       return Result.succeed()
     }
     return result

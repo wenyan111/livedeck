@@ -1,6 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import electronLog, { type FormatParams, type LogFunctions } from 'electron-log'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import windowManager from './windowManager'
@@ -30,6 +30,52 @@ fileTransport.resolvePathFn = (variables, message) => {
     ? defaultResolvePathFn.call(fileTransport, variables, message)
     : path.join(app.getPath('logs'), 'main.log')
 }
+
+/**
+ * 系统级提醒：出现警告/失败时让窗口「引起注意」。
+ *   Windows：任务栏按钮闪烁（flashFrame），点回窗口就停
+ *   macOS：Dock 图标跳一下 + 角标打一个标记（点回窗口清掉）
+ *
+ * 30 秒内只提醒一次，避免断播后上百条警告把 Dock 弹成迪斯科。
+ */
+let lastAttentionAt = 0
+function triggerAttention(level: string) {
+  // level 目前只用于日志，角标统一显示「!」
+  void level
+  const now = Date.now()
+  if (now - lastAttentionAt < 30_000) return
+  lastAttentionAt = now
+  try {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (process.platform === 'win32') {
+      win?.flashFrame(true)
+      setTimeout(() => win?.flashFrame(false), 10_000)
+    } else if (process.platform === 'darwin') {
+      app.dock?.bounce('informational')
+      // 统一用「!」：警告和失败都足够醒目（用户 2026-11-05：角标要用感叹号）
+      app.dock?.setBadge('!')
+    }
+  } catch {
+    // 提醒失败不影响主流程
+  }
+}
+
+electronLog.hooks.push(message => {
+  if (message.level === 'warn' || message.level === 'error') {
+    triggerAttention(message.level)
+  }
+  return message
+})
+
+// 用户回到窗口就把角标/闪烁清掉
+app.on('browser-window-focus', () => {
+  try {
+    app.dock?.setBadge('')
+    for (const w of BrowserWindow.getAllWindows()) w.flashFrame(false)
+  } catch {
+    // 忽略
+  }
+})
 
 const appRoot = path.join(app.getAppPath(), path.sep)
 const cleanPathRegex = new RegExp(appRoot.replace(/\\/g, '\\\\').replace(/\//g, '[\\\\/]'), 'gi')

@@ -18,7 +18,6 @@ import { autoReplyPlatforms, openPricePlatforms } from '@/abilities'
 import { useCurrentAutoMessage } from '@/hooks/useAutoMessage'
 import { useCurrentAutoPopUp } from '@/hooks/useAutoPopUp'
 import { useAutoReply } from '@/hooks/useAutoReply'
-import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { useCurrentLiveControl } from '@/hooks/useLiveControl'
 import { useCurrentOpenPriceRuntime } from '@/hooks/useOpenPriceScript'
 import { cn } from '@/lib/utils'
@@ -65,10 +64,8 @@ export default function Sidebar() {
   const isOpenPriceScriptRunning = isOpenPriceRunning && isConnected === 'connected'
   const isOpenPriceScriptFailed = Boolean(openPriceError) && isConnected === 'connected'
 
-  // 「自动回复」的子项摘要（随账号切换自动变，因为 config 是按账号存的）
-  const { config: autoReplyConfig } = useAutoReplyConfig()
-  const keywordCount = autoReplyConfig.comment.keywordReply.rules.length
-  const filterCount = autoReplyConfig.filterKeywords.length + autoReplyConfig.blockList.length
+  // 子项不再显示「开 / 关键词数」这类摘要，所以这里也不再读 config，
+  // 避免每次配置变更都触发侧栏重渲染
 
   // 展开状态记在本地，下次进来保持一致（默认展开，方便发现子项）
   const [autoReplyOpen, setAutoReplyOpen] = useState(() => {
@@ -142,19 +139,13 @@ export default function Sidebar() {
       isRunning: isAutoReplyRunning,
       icon: <Bot className="h-[18px] w-[18px]" />,
       platform: autoReplyPlatforms,
+      // 子项不再显示右侧状态小字（开 / 条数）：几个字挤在一列太乱，
+      // 状态用子项是否高亮 + 页面内的开关表达（用户 2026-11-05 要求）
       children: [
-        { hash: 'keyword', label: '关键词回复', badge: keywordCount || null },
-        {
-          hash: 'ai',
-          label: 'AI 回复',
-          badge: autoReplyConfig.comment.aiReply.enable ? '开' : null,
-        },
-        { hash: 'filter', label: '过滤与黑名单', badge: filterCount || null },
-        {
-          hash: 'mention',
-          label: '@ 回复',
-          badge: autoReplyConfig.comment.mentionReply.enable ? '开' : null,
-        },
+        { hash: 'keyword', label: '关键词回复' },
+        { hash: 'ai', label: 'AI 回复' },
+        { hash: 'filter', label: '过滤与黑名单' },
+        { hash: 'mention', label: '@ 回复' },
         { hash: 'platform', label: '平台专属' },
       ],
     },
@@ -282,26 +273,23 @@ export default function Sidebar() {
                       )}
                     </div>
                     {tab.children && autoReplyOpen && (
-                      <div className="mt-1.5 mb-2 ml-3 space-y-0.5 rounded-lg border border-border/70 bg-card p-1.5">
+                      // 子项沿用主项的卡片语言：圆角 + 细边框 + 底色，
+                      // 只是缩进一点、去掉图标，视觉上仍是「自动回复」这一组
+                      <div className="mt-1.5 mb-2 ml-3 space-y-1.5">
                         {tab.children.map(child => (
                           <NavLink
                             key={child.hash}
                             to={`${tab.id}/settings/${child.hash}`}
                             className={({ isActive }) =>
                               cn(
-                                'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+                                'flex items-center rounded-lg border px-2.5 py-2 text-[13px] transition-colors',
                                 isActive
-                                  ? 'bg-secondary font-medium text-foreground'
-                                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+                                  ? 'border-primary/40 bg-secondary font-medium text-foreground'
+                                  : 'border-border bg-card text-muted-foreground hover:border-primary/25 hover:bg-secondary/60 hover:text-foreground',
                               )
                             }
                           >
                             <span className="min-w-0 flex-1 truncate">{child.label}</span>
-                            {child.badge != null && child.badge !== '' && (
-                              <span className="shrink-0 rounded bg-background/70 px-1 py-0.5 text-[11px] tabular-nums text-muted-foreground">
-                                {child.badge}
-                              </span>
-                            )}
                           </NavLink>
                         ))}
                       </div>

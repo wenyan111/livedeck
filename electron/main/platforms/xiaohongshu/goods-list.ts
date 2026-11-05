@@ -367,8 +367,23 @@ export async function tagGoodsRows(page: Page): Promise<Frame | null> {
   return null
 }
 
+/**
+ * 上次导出诊断的时间。
+ *
+ * 下播后商品列表消失，弹窗任务每轮都会失败并触发这里；原来每次失败都写一份
+ * 页面结构（单份最多 200KB），一场播下来磁盘上堆几百个文件。
+ * 现在 5 分钟内只导出一次，够用来排查，又不会刷屏刷盘。
+ */
+let lastDumpAt = 0
+const DUMP_INTERVAL_MS = 5 * 60 * 1000
+
 /** 定位失败时把页面结构导出到日志目录，方便下一次直接对照修复 */
 export async function dumpGoodsDiagnostics(page: Page): Promise<string | null> {
+  const now = Date.now()
+  if (now - lastDumpAt < DUMP_INTERVAL_MS) {
+    return null // 限流：保留一份最新快照就够了
+  }
+  lastDumpAt = now
   try {
     const dir = path.join(app.getPath('logs'), 'goods-diagnostic')
     await fs.mkdir(dir, { recursive: true })
