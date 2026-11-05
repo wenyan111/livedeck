@@ -191,6 +191,8 @@ export interface IpcChannels {
     templateId?: string // 传 'use-saved' 使用已保存的模板
     /** 本次识别的任务 id，暂停时用它定位 */
     runId?: string
+    /** 页面「纠正记忆」里的规则，逐条追加到提示词 */
+    extraInstructions?: string[]
   }) => {
     values: Record<string, string>
     lowConfidence: string[]

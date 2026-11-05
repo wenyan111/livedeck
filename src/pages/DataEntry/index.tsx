@@ -3,12 +3,15 @@ import {
   ChevronDown,
   ChevronUp,
   MapPin,
+  MessageSquarePlus,
   Pause,
   Plus,
   RefreshCw,
+  Send,
   Settings2,
   Table,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
@@ -770,6 +773,59 @@ export default function DataEntry() {
   }, [sectionPlatforms])
 
   /**
+   * 「纠正记忆」：用户在板块里对着 AI 说一句（如「观看核心城市只填第一名」），
+   * 这句话会作为长期规则存下来，之后**每次识别都拼进提示词**。
+   * 按板块分开存，key = 板块 key（用户 2026-11-05 要求「随时调教，让他纠正记忆」）。
+   */
+  const [sectionNotes, setSectionNotes] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem('data-entry-section-notes')
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : null
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  })
+  const persistNotes = useCallback((next: Record<string, string[]>) => {
+    try {
+      localStorage.setItem('data-entry-section-notes', JSON.stringify(next))
+    } catch {
+      // 存不进去不影响当前会话
+    }
+  }, [])
+  /** 各板块输入框里的草稿 */
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({})
+  const addSectionNote = useCallback(
+    (key: string) => {
+      const text = (noteDraft[key] ?? '').trim()
+      if (!text) return
+      setSectionNotes(prev => {
+        const list = prev[key] ?? []
+        if (list.includes(text)) {
+          toast.error('这条已经记住了')
+          return prev
+        }
+        const next = { ...prev, [key]: [...list, text] }
+        persistNotes(next)
+        return next
+      })
+      setNoteDraft(prev => ({ ...prev, [key]: '' }))
+    },
+    [noteDraft, persistNotes, toast],
+  )
+  const removeSectionNote = useCallback(
+    (key: string, index: number) => {
+      setSectionNotes(prev => {
+        const list = (prev[key] ?? []).filter((_, i) => i !== index)
+        const next = { ...prev, [key]: list }
+        persistNotes(next)
+        return next
+      })
+    },
+    [persistNotes],
+  )
+
+  /**
    * 板块自定义名称（板块标题可以直接改，存 localStorage）。
    * 例如把「抖音小店」改成「英子-抖音」。
    */
@@ -1077,6 +1133,7 @@ export default function DataEntry() {
           columns: platformColumns,
           templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
           runId, // 暂停时按这个 id 找到本次任务
+          extraInstructions: sectionNotes[platform] ?? [], // 用户「纠正记忆」写下的规则
         })
         // 合并到当前活跃行
         setRows(prev =>
@@ -1150,6 +1207,7 @@ export default function DataEntry() {
       template,
       sectionLabel,
       setImagesOf,
+      sectionNotes,
     ],
   )
 
@@ -1479,6 +1537,66 @@ export default function DataEntry() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* 调教区：把「你希望它怎么填」说成一句规则，长期生效 */}
+              <div className="rounded-lg border bg-muted/30 px-2.5 py-2">
+                <div className="flex items-center gap-2">
+                  <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
+                  <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+                    纠正记忆
+                  </span>
+                  <Input
+                    value={noteDraft[pf] ?? ''}
+                    onChange={e => setNoteDraft(prev => ({ ...prev, [pf]: e.target.value }))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        addSectionNote(pf)
+                      }
+                    }}
+                    placeholder="跟识别说一句，比如：观看核心城市只填第一名；不要带顿号"
+                    className="h-7 flex-1 px-2 text-[11px]"
+                    title="回车即可记住；记住的规则会在每次识别时一起交给模型"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => addSectionNote(pf)}
+                    disabled={!(noteDraft[pf] ?? '').trim()}
+                  >
+                    <Send className="w-3 h-3 mr-1" />
+                    记住
+                  </Button>
+                </div>
+                {(sectionNotes[pf] ?? []).length > 0 && (
+                  <div className="mt-1.5 space-y-1">
+                    {(sectionNotes[pf] ?? []).map((note, i) => (
+                      <div
+                        // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
+                        key={`${pf}-note-${i}`}
+                        className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-1 text-[11px]"
+                      >
+                        <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 font-medium text-primary">
+                          你
+                        </span>
+                        <span className="flex-1 leading-relaxed text-foreground/85">{note}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeSectionNote(pf, i)}
+                          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                          title="忘掉这条规则"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <p className="pl-1 text-[10px] text-muted-foreground">
+                      已记住 {(sectionNotes[pf] ?? []).length} 条，每次识别都会带上；点 × 可以删掉
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖拽放置区，键盘不适用 */}
               <div
                 onDragEnter={handleDragEnter}

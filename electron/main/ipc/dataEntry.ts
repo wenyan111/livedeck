@@ -20,6 +20,7 @@ function setupIpcHandlers() {
       params.columns,
       template ?? undefined,
       params.runId,
+      params.extraInstructions,
     )
   })
 

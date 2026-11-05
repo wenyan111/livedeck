@@ -497,6 +497,8 @@ export class VisionRecognizer {
     columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS,
     template?: VisionTemplate | null,
     runId?: string,
+    /** 用户在页面「纠正记忆」里写下的规则，逐条追加到提示词里 */
+    extraInstructions?: string[],
   ): Promise<VisionResult> {
     const baseURL =
       config.provider === 'custom'
@@ -527,9 +529,24 @@ export class VisionRecognizer {
 
     const totalCalls = imageBatches.length * fieldChunks.length
     const useTemplate = template && template.fields.length > 0
+    // 用户在页面上「调教」出来的规则：拼进 system 提示词，每一次调用都带上
+    const extraRules = (extraInstructions ?? []).map(s => s.trim()).filter(Boolean)
+    const systemPrompt =
+      extraRules.length > 0
+        ? `${buildSystemPrompt()}\n\n【用户指定的纠正规则（优先级最高，与上面规则冲突时以这里为准）】\n${extraRules
+            .map((r, i) => `${i + 1}. ${r}`)
+            .join('\n')}`
+        : buildSystemPrompt()
     this.logger.info(
-      `共 ${urlPairs.length} 张图 → ${imageBatches.length} 个图片批；${targetCols.length} 个目标字段 → ${fieldChunks.length} 个字段块；计划 ${totalCalls} 次模型调用${useTemplate ? '（使用模板位置引导）' : ''}`,
+      `共 ${urlPairs.length} 张图 → ${imageBatches.length} 个图片批；${targetCols.length} 个目标字段 → ${fieldChunks.length} 个字段块；计划 ${totalCalls} 次模型调用${useTemplate ? '（使用模板位置引导）' : ''}${
+        extraRules.length > 0 ? `；附 ${extraRules.length} 条用户纠正规则` : ''
+      }`,
     )
+    if (extraRules.length > 0) {
+      this.logger.info(
+        `本次生效的纠正规则：\n${extraRules.map((r, i) => `  ${i + 1}. ${r}`).join('\n')}`,
+      )
+    }
 
     const openai = new OpenAI({ apiKey: config.apiKey, baseURL })
     const mergedValues: Record<string, string> = {}
@@ -576,7 +593,7 @@ export class VisionRecognizer {
             resp = await openai.chat.completions.create({
               model: config.model,
               messages: [
-                { role: 'system', content: buildSystemPrompt() },
+                { role: 'system', content: systemPrompt },
                 { role: 'user', content },
               ],
               stream: false,
