@@ -2,6 +2,7 @@ import { dialog } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
 import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
+import { liveReportLedgerService } from '#/services/LiveReportLedgerService'
 import { tableFileService } from '#/services/TableFileService'
 import { VisionRecognizer } from '#/services/VisionRecognizer'
 import { visionTemplateService } from '#/services/VisionTemplateService'
@@ -87,6 +88,24 @@ function setupIpcHandlers() {
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveRows, async (_, state) => {
     await dataEntryStateService.saveState(state)
+  })
+
+  // ── 日报总表（所有板块汇总成一张表） ──
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.getLedger, async () => {
+    return await liveReportLedgerService.load()
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.upsertLedger, async (_, records) => {
+    return await liveReportLedgerService.upsert(records)
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveLedger, async (_, records) => {
+    return await liveReportLedgerService.saveAll(records)
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.exportLedger, async (_, params) => {
+    // 总表的「板块 / 平台」两列由渲染进程拼好，这里只负责落盘
+    return await tableFileService.exportRows(params.rows, params.outputPath, params.columns)
   })
 }
 

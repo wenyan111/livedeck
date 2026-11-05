@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { buildLedgerColumns, hasAnyValue, type LedgerRecord } from 'shared/dataEntryLedger'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import {
@@ -702,6 +703,21 @@ export default function DataEntry() {
     useAIProvider('vision')
 
   /**
+   * 页面视图：分板块录入 / 总表。
+   * 总表把所有板块、所有日期的行汇总在一起（按「日期+板块+场次」去重），
+   * 导出一次就拿到整张表，不用一板块导一遍（用户 2026-11-05 需求）。
+   */
+  const [view, setView] = useState<'entry' | 'ledger'>('entry')
+  const [ledger, setLedger] = useState<LedgerRecord[]>([])
+  /** 总表筛选：看哪个板块（'' = 全部） */
+  const [ledgerFilter, setLedgerFilter] = useState('')
+  /**
+   * 截图多选：按板块记选中的图片 id。
+   * 用来「挑几张一起重认」（单张 hover 的「重认」只能一张一张点，用户 2026-11-05 反馈要能多张）。
+   */
+  const [pickedImages, setPickedImages] = useState<Record<string, string[]>>({})
+
+  /**
    * 截图按平台存放：每个平台的板块有自己的截图列表（各平台大屏结构不同，
    * 混在一起识别会串字段）。key = platform。
    */
@@ -1059,6 +1075,17 @@ export default function DataEntry() {
   const removeImage = (platform: LiveControlPlatform, id: string) =>
     setImagesOf(platform, prev => prev.filter(i => i.id !== id))
 
+  /** 勾选 / 取消勾选一张截图（多选重认用） */
+  const togglePick = (sectionKey: string, id: string) => {
+    setPickedImages(prev => {
+      const list = prev[sectionKey] ?? []
+      const next = list.includes(id) ? list.filter(x => x !== id) : [...list, id]
+      return { ...prev, [sectionKey]: next }
+    })
+  }
+  const clearPicks = (sectionKey: string) =>
+    setPickedImages(prev => ({ ...prev, [sectionKey]: [] }))
+
   // 支持从剪贴板粘贴截图（macOS 截屏后 Cmd+V / Windows Ctrl+V）
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -1192,6 +1219,8 @@ export default function DataEntry() {
         setRecognizing(false)
         setRecognizingKey(null)
         setPausing(false)
+        // 这一批处理完就清掉勾选，避免下次误重认
+        setPickedImages(prev => ({ ...prev, [platform]: [] }))
       }
     },
     [
@@ -1234,6 +1263,14 @@ export default function DataEntry() {
       .catch(() => {})
   }, [])
 
+  /** 进页面先把总表读出来 */
+  useEffect(() => {
+    window.ipcRenderer
+      .invoke(IPC_CHANNELS.dataEntry.getLedger)
+      .then((all: LedgerRecord[]) => setLedger(all ?? []))
+      .catch(() => {})
+  }, [])
+
   /** 表单数据自动存档：任何修改（填字/识别/增删行/切换行）后防抖落盘，重启不再丢 */
   useEffect(() => {
     if (!loadedRef.current) return
@@ -1244,6 +1281,113 @@ export default function DataEntry() {
     }, 500)
     return () => clearTimeout(t)
   }, [rows, activeRowId])
+
+  /**
+   * 自动归档进「总表」：每次改动（识别/手填/增删行）防抖后把有内容的行 upsert 进总表。
+   * 去重键是「日期 + 板块 + 场次」，同一场重复识别只会更新同一行（用户 2026-11-05 需求）。
+   */
+  useEffect(() => {
+    // 注意：这里**不能**用 loadedRef 拦（它是给存档用的），
+    // 否则刚打开时恢复出来的历史行不会归档；空行会被 hasAnyValue 过滤掉，所以安全。
+    const t = setTimeout(() => {
+      const now = Date.now()
+      const records: LedgerRecord[] = rows
+        .filter(r => hasAnyValue(r.values))
+        .map(r => ({
+          id: r.id,
+          sectionKey: r.platform as string,
+          sectionName: sectionLabel(r.platform as string),
+          platform: r.platform,
+          values: r.values,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      if (records.length === 0) return
+      window.ipcRenderer
+        .invoke(IPC_CHANNELS.dataEntry.upsertLedger, records)
+        .then((all: LedgerRecord[]) => setLedger(all))
+        .catch(() => {})
+    }, 1200)
+    return () => clearTimeout(t)
+  }, [rows, sectionLabel])
+
+  // ── 总表：表头（各板块字段并集）、排序后的行 ──
+  const ledgerColumns = useMemo(() => buildLedgerColumns(columns), [columns])
+  const ledgerRows = useMemo(() => {
+    const list = ledgerFilter ? ledger.filter(r => r.sectionKey === ledgerFilter) : ledger
+    return [...list].sort((a, b) => {
+      const da = a.values.date ?? ''
+      const db = b.values.date ?? ''
+      if (da !== db) return db.localeCompare(da) // 日期新的在上
+      const sa = a.values.session ?? ''
+      const sb = b.values.session ?? ''
+      if (sa !== sb) return sa.localeCompare(sb)
+      return b.updatedAt - a.updatedAt
+    })
+  }, [ledger, ledgerFilter])
+
+  /** 总表里直接改一个格子 */
+  const updateLedgerCell = useCallback((id: string, key: string, value: string) => {
+    setLedger(prev => {
+      const next = prev.map(r =>
+        r.id === id ? { ...r, values: { ...r.values, [key]: value }, updatedAt: Date.now() } : r,
+      )
+      window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveLedger, next).catch(() => {})
+      return next
+    })
+  }, [])
+
+  /** 总表里删掉一行（只删总表记录，不影响录入页的行） */
+  const removeLedgerRow = useCallback((id: string) => {
+    setLedger(prev => {
+      const next = prev.filter(r => r.id !== id)
+      window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveLedger, next).catch(() => {})
+      return next
+    })
+  }, [])
+
+  /** 一次性导出整张总表（所有板块、所有日期） */
+  const handleExportLedger = useCallback(async () => {
+    if (ledgerRows.length === 0) {
+      toast.error('总表还是空的，先在录入页识别/填写数据')
+      return
+    }
+    const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
+    if (!outputPath) return
+    const head: LiveReportColumn[] = [
+      {
+        key: '__section',
+        label: '板块',
+        unit: 'text',
+        source: 'manual',
+        group: '总表',
+        platform: 'douyin',
+      },
+      {
+        key: '__platform',
+        label: '平台',
+        unit: 'text',
+        source: 'manual',
+        group: '总表',
+        platform: 'douyin',
+      },
+    ]
+    const rows = ledgerRows.map(r => ({
+      ...r.values,
+      __section: r.sectionName,
+      __platform: platformLabels[r.platform] ?? r.platform,
+    }))
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportLedger, {
+        rows,
+        columns: [...head, ...ledgerColumns],
+        outputPath,
+      })
+      toast.success(`已导出 ${rows.length} 行整表到 ${outputPath}`)
+    } catch (error) {
+      toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [ledgerRows, ledgerColumns, toast])
 
   /** 校准模板：用该平台的第一张截图 + 该平台当前行数据作为已知值 */
   const handleCalibrate = useCallback(
@@ -1468,361 +1612,576 @@ export default function DataEntry() {
 
   return (
     <div className="container py-8 space-y-6 max-w-6xl">
-      <Title title="直播日报" description="下播后：拖入截图 → 视觉识别 → 核对 → 导出本地 CSV" />
+      <Title title="直播日报" description="下播后：拖入截图 → 视觉识别 → 核对 → 自动汇总进总表" />
+
+      {/* 两个视图：分板块录入（截图识别 + 数据行） / 总表（所有板块所有日期汇总） */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant={view === 'entry' ? 'default' : 'outline'}
+          onClick={() => setView('entry')}
+        >
+          <Settings2 className="w-4 h-4 mr-1" />
+          分板块录入
+        </Button>
+        <Button
+          size="sm"
+          variant={view === 'ledger' ? 'default' : 'outline'}
+          onClick={() => setView('ledger')}
+        >
+          <Table className="w-4 h-4 mr-1" />
+          总表{ledger.length > 0 ? `（${ledger.length} 条）` : ''}
+        </Button>
+        <span className="text-[11px] text-muted-foreground">
+          数据会自动按「日期 + 板块 + 场次」汇进总表，同一场重复识别只更新那一行
+        </span>
+      </div>
 
       {/* 按平台分板块：每个板块自带「截图识别 + 数据行」，板块与当前账号无关 */}
-      {sectionPlatforms.map(pf => {
-        // 板块 key 是字符串，平台枚举只在取平台名/默认字段时用
-        const pk = pf as LiveControlPlatform
-        const pfColumns = columns.filter(c => (c.platform as string) === pf)
-        const pfRows = rows.filter(r => (r.platform as string) === pf)
-        const pfImages = imagesOf(pk)
-        const pfActiveIndex = pfRows.findIndex(r => r.id === activeRowId)
-        /** 还没识别过的图（「开始识别」只送这些） */
-        const pfPending = pfImages.filter(i => !i.recognized)
-        const pfDone = pfImages.length - pfPending.length
-        /** 本板块是否正在识别 */
-        const pfRunning = recognizing && recognizingKey === pf
-        return (
-          <Card key={pf}>
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Input
-                      value={
-                        sectionNames[pf] ?? platformLabels[pf as LiveControlPlatform] ?? '新板块'
-                      }
-                      onChange={e => setSectionName(pf, e.target.value)}
-                      className="h-7 w-[180px] px-2 text-base font-semibold"
-                      placeholder="板块名称"
-                      title="点这里可以改板块名称"
-                    />
-                    <span className="text-sm font-normal text-muted-foreground">
-                      （{pfRows.length} 行）
-                    </span>
-                  </CardTitle>
-                  <CardDescription>
-                    截图识别与数据记录都属于这个板块；识别结果写入当前选中行（蓝圈）
-                  </CardDescription>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setColumnModalPlatform(pk)
-                      setColumnModalOpen(true)
-                    }}
-                  >
-                    <Settings2 className="w-4 h-4 mr-1" /> 管理列
-                  </Button>
-                  <Button size="sm" onClick={() => addRow(pk)}>
-                    <Plus className="w-4 h-4 mr-1" /> 新增一行
-                  </Button>
-                  {/* 第一个板块是「主板块」，不提供删除入口；其余板块可删，
-                      板块内数据会并入第一个板块，不会丢 */}
-                  {sectionPlatforms[0] !== pf && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="px-2 text-muted-foreground hover:text-destructive"
-                      title="删除这个板块（里面的数据会并入第一个板块）"
-                      onClick={() => removeSection(pf)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {/* 调教区：把「你希望它怎么填」说成一句规则，长期生效 */}
-              <div className="rounded-lg border bg-muted/30 px-2.5 py-2">
-                <div className="flex items-center gap-2">
-                  <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
-                  <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
-                    纠正记忆
-                  </span>
-                  <Input
-                    value={noteDraft[pf] ?? ''}
-                    onChange={e => setNoteDraft(prev => ({ ...prev, [pf]: e.target.value }))}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        addSectionNote(pf)
-                      }
-                    }}
-                    placeholder="跟识别说一句，比如：观看核心城市只填第一名；不要带顿号"
-                    className="h-7 flex-1 px-2 text-[11px]"
-                    title="回车即可记住；记住的规则会在每次识别时一起交给模型"
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-[11px]"
-                    onClick={() => addSectionNote(pf)}
-                    disabled={!(noteDraft[pf] ?? '').trim()}
-                  >
-                    <Send className="w-3 h-3 mr-1" />
-                    记住
-                  </Button>
-                </div>
-                {(sectionNotes[pf] ?? []).length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {(sectionNotes[pf] ?? []).map((note, i) => (
-                      <div
-                        // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
-                        key={`${pf}-note-${i}`}
-                        className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-1 text-[11px]"
-                      >
-                        <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 font-medium text-primary">
-                          你
-                        </span>
-                        <span className="flex-1 leading-relaxed text-foreground/85">{note}</span>
-                        <button
-                          type="button"
-                          onClick={() => removeSectionNote(pf, i)}
-                          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                          title="忘掉这条规则"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                    <p className="pl-1 text-[10px] text-muted-foreground">
-                      已记住 {(sectionNotes[pf] ?? []).length} 条，每次识别都会带上；点 × 可以删掉
-                    </p>
+      {view === 'entry' &&
+        sectionPlatforms.map(pf => {
+          // 板块 key 是字符串，平台枚举只在取平台名/默认字段时用
+          const pk = pf as LiveControlPlatform
+          const pfColumns = columns.filter(c => (c.platform as string) === pf)
+          const pfRows = rows.filter(r => (r.platform as string) === pf)
+          const pfImages = imagesOf(pk)
+          const pfActiveIndex = pfRows.findIndex(r => r.id === activeRowId)
+          /** 还没识别过的图（「开始识别」只送这些） */
+          const pfPending = pfImages.filter(i => !i.recognized)
+          const pfDone = pfImages.length - pfPending.length
+          /** 本板块是否正在识别 */
+          const pfRunning = recognizing && recognizingKey === pf
+          /** 本板块里被勾选的截图（可多选重认） */
+          const pfPicked = pickedImages[pf] ?? []
+          return (
+            <Card key={pf}>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Input
+                        value={
+                          sectionNames[pf] ?? platformLabels[pf as LiveControlPlatform] ?? '新板块'
+                        }
+                        onChange={e => setSectionName(pf, e.target.value)}
+                        className="h-7 w-[180px] px-2 text-base font-semibold"
+                        placeholder="板块名称"
+                        title="点这里可以改板块名称"
+                      />
+                      <span className="text-sm font-normal text-muted-foreground">
+                        （{pfRows.length} 行）
+                      </span>
+                    </CardTitle>
+                    <CardDescription>
+                      截图识别与数据记录都属于这个板块；识别结果写入当前选中行（蓝圈）
+                    </CardDescription>
                   </div>
-                )}
-              </div>
-
-              {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖拽放置区，键盘不适用 */}
-              <div
-                onDragEnter={handleDragEnter}
-                onDragLeave={handleDragLeave}
-                onDragOver={handleDragOver}
-                onDrop={e => handleDrop(e, pk)}
-                className={`relative rounded-lg border-2 border-dashed p-2 transition-colors ${
-                  isDragging ? 'border-primary bg-primary/5' : 'border-border/60'
-                }`}
-              >
-                {isDragging && (
-                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/5">
-                    <p className="text-sm font-medium text-primary">
-                      松开鼠标，把图片加入「{sectionLabel(pf)}」的识别列表
-                    </p>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => fileInputs.current[pk]?.click()}>
-                    选择截图
-                  </Button>
-                  {/* 识别中：同一个位置变成「暂停识别」，跑完当前这次模型调用就停 */}
-                  {pfRunning ? (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={handlePauseRecognize}
-                      disabled={pausing}
-                    >
-                      <Pause className="w-3.5 h-3.5 mr-1" />
-                      {pausing ? '正在暂停…' : '暂停识别'}
-                    </Button>
-                  ) : (
+                  <div className="flex shrink-0 gap-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => handleRecognize(pk)}
-                      disabled={recognizing || pfPending.length === 0}
-                      title={
-                        pfPending.length === 0
-                          ? '所有截图都识别过了；要重新识别请点旁边的「重认全部」'
-                          : `只识别新加的 ${pfPending.length} 张，已识别的 ${pfDone} 张不会重复送模型`
-                      }
+                      onClick={() => {
+                        setColumnModalPlatform(pk)
+                        setColumnModalOpen(true)
+                      }}
                     >
-                      {`${
-                        pfDone > 0 && pfPending.length > 0 ? '继续识别' : '开始识别'
-                      }${pfPending.length > 0 ? ` ${pfPending.length} 张` : ''} → 写入第 ${
-                        pfActiveIndex >= 0 ? pfActiveIndex + 1 : 1
-                      } 行`}
+                      <Settings2 className="w-4 h-4 mr-1" /> 管理列
                     </Button>
-                  )}
-                  {/* 需要推倒重来时用：把所有图重新识别一遍（会重新花钱调用模型） */}
-                  {!pfRunning && pfDone > 0 && (
+                    <Button size="sm" onClick={() => addRow(pk)}>
+                      <Plus className="w-4 h-4 mr-1" /> 新增一行
+                    </Button>
+                    {/* 第一个板块是「主板块」，不提供删除入口；其余板块可删，
+                      板块内数据会并入第一个板块，不会丢 */}
+                    {sectionPlatforms[0] !== pf && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="px-2 text-muted-foreground hover:text-destructive"
+                        title="删除这个板块（里面的数据会并入第一个板块）"
+                        onClick={() => removeSection(pf)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* 调教区：把「你希望它怎么填」说成一句规则，长期生效 */}
+                <div className="rounded-lg border bg-muted/30 px-2.5 py-2">
+                  <div className="flex items-center gap-2">
+                    <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
+                    <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+                      纠正记忆
+                    </span>
+                    <Input
+                      value={noteDraft[pf] ?? ''}
+                      onChange={e => setNoteDraft(prev => ({ ...prev, [pf]: e.target.value }))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addSectionNote(pf)
+                        }
+                      }}
+                      placeholder="跟识别说一句，比如：观看核心城市只填第一名；不要带顿号"
+                      className="h-7 flex-1 px-2 text-[11px]"
+                      title="回车即可记住；记住的规则会在每次识别时一起交给模型"
+                    />
                     <Button
                       size="sm"
-                      variant="ghost"
-                      className="px-2 text-muted-foreground"
-                      onClick={() => handleRecognize(pk, { images: pfImages })}
-                      disabled={recognizing}
-                      title={`忽略「已识别」标记，把这 ${pfImages.length} 张图全部重新识别一遍`}
+                      variant="outline"
+                      className="h-7 px-2 text-[11px]"
+                      onClick={() => addSectionNote(pf)}
+                      disabled={!(noteDraft[pf] ?? '').trim()}
                     >
-                      <RefreshCw className="w-3.5 h-3.5 mr-1" />
-                      重认全部
+                      <Send className="w-3 h-3 mr-1" />
+                      记住
                     </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant={template ? 'secondary' : 'outline'}
-                    onClick={() => handleCalibrate(pk)}
-                    disabled={calibrating || pfImages.length === 0}
-                  >
-                    <MapPin className="w-3.5 h-3.5 mr-1" />
-                    {calibrating
-                      ? '校准中...'
-                      : template
-                        ? `已校准(${template.fieldCount}字段)`
-                        : '校准模板'}
-                  </Button>
-                  <input
-                    ref={el => {
-                      fileInputs.current[pk] = el
-                    }}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={e => handleSelectFiles(e, pk)}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {pfImages.length === 0
-                      ? '支持拖拽 / ⌘V 粘贴；可多选整屏、流量、商品、人群'
-                      : `共 ${pfImages.length} 张 · 已识别 ${pfDone} 张 · 待识别 ${pfPending.length} 张`}
-                  </span>
-                </div>
-
-                {pfImages.length > 0 && (
-                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
-                    {pfImages.map(img => (
-                      <div
-                        key={img.id}
-                        className={`group relative overflow-hidden rounded-md border ${
-                          img.recognized ? 'border-emerald-500/50' : ''
-                        }`}
-                      >
-                        <img src={img.url} alt={img.name} className="h-16 w-full object-cover" />
-                        {/* 已识别的图打勾，下次「开始识别」会跳过它们 */}
-                        {img.recognized && (
-                          <span className="absolute left-1 top-1 rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-medium text-white">
-                            ✓ 已识别
+                  </div>
+                  {(sectionNotes[pf] ?? []).length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      {(sectionNotes[pf] ?? []).map((note, i) => (
+                        <div
+                          // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
+                          key={`${pf}-note-${i}`}
+                          className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-1 text-[11px]"
+                        >
+                          <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 font-medium text-primary">
+                            你
                           </span>
-                        )}
-                        <div className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 opacity-0 transition group-hover:opacity-100">
-                          {img.recognized && (
-                            <button
-                              type="button"
-                              className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground"
-                              onClick={() => handleRecognize(pk, { images: [img] })}
-                              disabled={recognizing}
-                              title="只把这一张重新识别一遍"
-                            >
-                              重认
-                            </button>
-                          )}
+                          <span className="flex-1 leading-relaxed text-foreground/85">{note}</span>
                           <button
                             type="button"
-                            className="rounded bg-primary px-1.5 py-0.5 text-[10px] text-white"
-                            onClick={() => setCropTarget(img)}
+                            onClick={() => removeSectionNote(pf, i)}
+                            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                            title="忘掉这条规则"
                           >
-                            裁剪
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded bg-destructive px-1.5 py-0.5 text-[10px] text-white"
-                            onClick={() => removeImage(pk, img.id)}
-                          >
-                            删除
+                            <X className="w-3 h-3" />
                           </button>
                         </div>
-                      </div>
+                      ))}
+                      <p className="pl-1 text-[10px] text-muted-foreground">
+                        已记住 {(sectionNotes[pf] ?? []).length} 条，每次识别都会带上；点 × 可以删掉
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖拽放置区，键盘不适用 */}
+                <div
+                  onDragEnter={handleDragEnter}
+                  onDragLeave={handleDragLeave}
+                  onDragOver={handleDragOver}
+                  onDrop={e => handleDrop(e, pk)}
+                  className={`relative rounded-lg border-2 border-dashed p-2 transition-colors ${
+                    isDragging ? 'border-primary bg-primary/5' : 'border-border/60'
+                  }`}
+                >
+                  {isDragging && (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/5">
+                      <p className="text-sm font-medium text-primary">
+                        松开鼠标，把图片加入「{sectionLabel(pf)}」的识别列表
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" onClick={() => fileInputs.current[pk]?.click()}>
+                      选择截图
+                    </Button>
+                    {/* 识别中：同一个位置变成「暂停识别」，跑完当前这次模型调用就停 */}
+                    {pfRunning ? (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handlePauseRecognize}
+                        disabled={pausing}
+                      >
+                        <Pause className="w-3.5 h-3.5 mr-1" />
+                        {pausing ? '正在暂停…' : '暂停识别'}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRecognize(pk)}
+                        disabled={recognizing || pfPending.length === 0}
+                        title={
+                          pfPending.length === 0
+                            ? '所有截图都识别过了；要重新识别请点旁边的「重认全部」'
+                            : `只识别新加的 ${pfPending.length} 张，已识别的 ${pfDone} 张不会重复送模型`
+                        }
+                      >
+                        {`${
+                          pfDone > 0 && pfPending.length > 0 ? '继续识别' : '开始识别'
+                        }${pfPending.length > 0 ? ` ${pfPending.length} 张` : ''} → 写入第 ${
+                          pfActiveIndex >= 0 ? pfActiveIndex + 1 : 1
+                        } 行`}
+                      </Button>
+                    )}
+                    {/* 需要推倒重来时用：把所有图重新识别一遍（会重新花钱调用模型） */}
+                    {!pfRunning && pfDone > 0 && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="px-2 text-muted-foreground"
+                        onClick={() => handleRecognize(pk, { images: pfImages })}
+                        disabled={recognizing}
+                        title={`忽略「已识别」标记，把这 ${pfImages.length} 张图全部重新识别一遍`}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                        重认全部
+                      </Button>
+                    )}
+                    {/* 点缩略图可多选，这里一次重认选中的几张 */}
+                    {pfPicked.length > 0 && !pfRunning && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            handleRecognize(pk, {
+                              images: pfImages.filter(i => pfPicked.includes(i.id)),
+                            })
+                          }
+                          disabled={recognizing}
+                          title="只把勾选的这几张重新识别一遍"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                          重认选中 {pfPicked.length} 张
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="px-2 text-muted-foreground"
+                          onClick={() => clearPicks(pf)}
+                        >
+                          取消选择
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={template ? 'secondary' : 'outline'}
+                      onClick={() => handleCalibrate(pk)}
+                      disabled={calibrating || pfImages.length === 0}
+                    >
+                      <MapPin className="w-3.5 h-3.5 mr-1" />
+                      {calibrating
+                        ? '校准中...'
+                        : template
+                          ? `已校准(${template.fieldCount}字段)`
+                          : '校准模板'}
+                    </Button>
+                    <input
+                      ref={el => {
+                        fileInputs.current[pk] = el
+                      }}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={e => handleSelectFiles(e, pk)}
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {pfImages.length === 0
+                        ? '支持拖拽 / ⌘V 粘贴；可多选整屏、流量、商品、人群'
+                        : `共 ${pfImages.length} 张 · 已识别 ${pfDone} 张 · 待识别 ${pfPending.length} 张${
+                            pfPicked.length > 0
+                              ? ` · 已勾选 ${pfPicked.length} 张`
+                              : ' · 点图可勾选多张'
+                          }`}
+                    </span>
+                  </div>
+
+                  {pfImages.length > 0 && (
+                    <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+                      {pfImages.map(img => {
+                        const picked = (pickedImages[pf] ?? []).includes(img.id)
+                        return (
+                          <div
+                            key={img.id}
+                            className={`group relative overflow-hidden rounded-md border ${
+                              picked
+                                ? 'border-primary ring-2 ring-primary/40'
+                                : img.recognized
+                                  ? 'border-emerald-500/50'
+                                  : ''
+                            }`}
+                          >
+                            {/* 点图片本身 = 勾选/取消勾选（可多选，然后一次重认） */}
+                            <button
+                              type="button"
+                              className="block w-full"
+                              onClick={() => togglePick(pf, img.id)}
+                              title="点击选中这张；可多选后一次重认"
+                            >
+                              <img
+                                src={img.url}
+                                alt={img.name}
+                                className="h-16 w-full object-cover"
+                              />
+                            </button>
+                            {/* 已识别的图打勾，下次「开始识别」会跳过它们 */}
+                            {img.recognized && (
+                              <span className="pointer-events-none absolute left-1 top-1 rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-medium text-white">
+                                ✓ 已识别
+                              </span>
+                            )}
+                            {/* 选中标记放右上角，避免和「已识别」挤在一起 */}
+                            <span
+                              className={`pointer-events-none absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded border text-[9px] font-bold ${
+                                picked
+                                  ? 'border-primary bg-primary text-white'
+                                  : 'border-white/70 bg-black/40 text-transparent opacity-0 group-hover:opacity-100'
+                              }`}
+                            >
+                              ✓
+                            </span>
+                            <div className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 opacity-0 transition group-hover:opacity-100">
+                              {img.recognized && (
+                                <button
+                                  type="button"
+                                  className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground"
+                                  onClick={() => handleRecognize(pk, { images: [img] })}
+                                  disabled={recognizing}
+                                  title="只把这一张重新识别一遍"
+                                >
+                                  重认
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="rounded bg-primary px-1.5 py-0.5 text-[10px] text-white"
+                                onClick={() => setCropTarget(img)}
+                              >
+                                裁剪
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded bg-destructive px-1.5 py-0.5 text-[10px] text-white"
+                                onClick={() => removeImage(pk, img.id)}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {pfRows.length === 0 ? (
+                  <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                    这个板块还没有数据行，点右上角「新增一行」开始
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {pfRows.map((row, idx) => (
+                      <RowCard
+                        key={row.id}
+                        row={row}
+                        rowIndex={idx}
+                        rowCount={pfRows.length}
+                        isActive={row.id === activeRowId}
+                        columns={pfColumns}
+                        onSelect={() => setActiveRowId(row.id)}
+                        onUpdateValues={updateCellValue}
+                        onDelete={deleteRow}
+                      />
                     ))}
                   </div>
                 )}
-              </div>
 
-              {pfRows.length === 0 ? (
-                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                  这个板块还没有数据行，点右上角「新增一行」开始
-                </p>
-              ) : (
-                <div className="space-y-2.5">
-                  {pfRows.map((row, idx) => (
-                    <RowCard
-                      key={row.id}
-                      row={row}
-                      rowIndex={idx}
-                      rowCount={pfRows.length}
-                      isActive={row.id === activeRowId}
-                      columns={pfColumns}
-                      onSelect={() => setActiveRowId(row.id)}
-                      onUpdateValues={updateCellValue}
-                      onDelete={deleteRow}
-                    />
-                  ))}
+                <div className="flex flex-wrap gap-2 border-t pt-3">
+                  <Button size="sm" onClick={() => handleExport(pk)}>
+                    <Table className="w-4 h-4 mr-1" /> 导出「{sectionLabel(pf)}」 {pfRows.length} 行
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      const outputPath = await window.ipcRenderer.invoke(
+                        IPC_CHANNELS.dataEntry.selectOutputPath,
+                      )
+                      if (!outputPath) return
+                      try {
+                        const saved = await window.ipcRenderer.invoke(
+                          IPC_CHANNELS.dataEntry.generateTemplate,
+                          { outputPath, columns: pfColumns },
+                        )
+                        toast.success(`已生成模板：${saved}`)
+                      } catch (error) {
+                        toast.error(
+                          `生成失败：${error instanceof Error ? error.message : String(error)}`,
+                        )
+                      }
+                    }}
+                  >
+                    生成空白模板
+                  </Button>
                 </div>
-              )}
-
-              <div className="flex flex-wrap gap-2 border-t pt-3">
-                <Button size="sm" onClick={() => handleExport(pk)}>
-                  <Table className="w-4 h-4 mr-1" /> 导出「{sectionLabel(pf)}」 {pfRows.length} 行
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={async () => {
-                    const outputPath = await window.ipcRenderer.invoke(
-                      IPC_CHANNELS.dataEntry.selectOutputPath,
-                    )
-                    if (!outputPath) return
-                    try {
-                      const saved = await window.ipcRenderer.invoke(
-                        IPC_CHANNELS.dataEntry.generateTemplate,
-                        { outputPath, columns: pfColumns },
-                      )
-                      toast.success(`已生成模板：${saved}`)
-                    } catch (error) {
-                      toast.error(
-                        `生成失败：${error instanceof Error ? error.message : String(error)}`,
-                      )
-                    }
-                  }}
-                >
-                  生成空白模板
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )
-      })}
+              </CardContent>
+            </Card>
+          )
+        })}
 
       {/* 新建板块：板块与平台解耦，新建后自己改名、从别的板块导入字段 */}
-      <Card>
-        <CardContent className="flex flex-wrap items-center gap-2 py-3">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              const key = `custom-${Date.now().toString(36)}`
-              setSectionPlatforms(prev => [...prev, key])
-              setSectionNames(prev => {
-                const next = { ...prev, [key]: `新板块 ${Object.keys(prev).length + 1}` }
-                try {
-                  localStorage.setItem('data-entry-section-names', JSON.stringify(next))
-                } catch {
-                  // 忽略
-                }
-                return next
-              })
-            }}
-          >
-            <Plus className="w-3.5 h-3.5 mr-1" /> 新建板块
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            新建后点标题改名，再点「管理列 → 导入字段」从其它板块复制模板
-          </span>
-        </CardContent>
-      </Card>
+      {view === 'entry' && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-2 py-3">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                const key = `custom-${Date.now().toString(36)}`
+                setSectionPlatforms(prev => [...prev, key])
+                setSectionNames(prev => {
+                  const next = { ...prev, [key]: `新板块 ${Object.keys(prev).length + 1}` }
+                  try {
+                    localStorage.setItem('data-entry-section-names', JSON.stringify(next))
+                  } catch {
+                    // 忽略
+                  }
+                  return next
+                })
+              }}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" /> 新建板块
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              新建后点标题改名，再点「管理列 → 导入字段」从其它板块复制模板
+            </span>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 总表：所有板块、所有日期的数据都在这一张表里 ── */}
+      {view === 'ledger' && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">日报总表</CardTitle>
+                <CardDescription className="text-xs">
+                  共 {ledger.length} 条记录 · 按「日期 + 板块 +
+                  场次」自动去重；格子里可以直接改，改完自动存
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={ledgerFilter || '__all'}
+                  onValueChange={v => setLedgerFilter(v === '__all' ? '' : v)}
+                >
+                  <SelectTrigger className="h-8 w-[150px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all">全部板块</SelectItem>
+                    {sectionPlatforms.map(pf => (
+                      <SelectItem key={pf} value={pf}>
+                        {sectionLabel(pf)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button size="sm" onClick={handleExportLedger} disabled={ledgerRows.length === 0}>
+                  <Table className="w-4 h-4 mr-1" />
+                  导出整表（{ledgerRows.length} 行）
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {ledgerRows.length === 0 ? (
+              <p className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
+                总表还是空的：去「分板块录入」里识别或填写数据，有内容的行会自动汇总到这里
+              </p>
+            ) : (
+              <div className="overflow-auto rounded-md border" style={{ maxHeight: 560 }}>
+                <table className="w-max border-collapse text-[11px]">
+                  <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
+                    <tr>
+                      <th className="min-w-[92px] border-b border-r px-2 py-1 text-left font-semibold">
+                        板块
+                      </th>
+                      <th className="min-w-[92px] border-b px-2 py-1 text-left font-semibold">
+                        日期
+                      </th>
+                      <th className="min-w-[70px] border-b px-2 py-1 text-left font-semibold">
+                        场次
+                      </th>
+                      {ledgerColumns
+                        .filter(
+                          c => c.key !== 'date' && c.key !== 'session' && c.key !== 'weekLabel',
+                        )
+                        .map(c => (
+                          <th
+                            key={c.key}
+                            className="min-w-[76px] border-b px-2 py-1 text-left font-semibold"
+                            title={c.key}
+                          >
+                            {c.label}
+                          </th>
+                        ))}
+                      <th className="border-b px-2 py-1" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ledgerRows.map(r => {
+                      const cols = ledgerColumns.filter(
+                        c => c.key !== 'date' && c.key !== 'session' && c.key !== 'weekLabel',
+                      )
+                      return (
+                        <tr key={r.id} className="hover:bg-muted/40">
+                          <td className="border-b border-r px-2 py-1 text-muted-foreground">
+                            {r.sectionName}
+                          </td>
+                          <td className="border-b px-0.5 py-0.5">
+                            <input
+                              value={r.values.date ?? ''}
+                              onChange={e => updateLedgerCell(r.id, 'date', e.target.value)}
+                              placeholder="—"
+                              className="w-full min-w-[88px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
+                            />
+                          </td>
+                          <td className="border-b px-0.5 py-0.5">
+                            <input
+                              value={r.values.session ?? ''}
+                              onChange={e => updateLedgerCell(r.id, 'session', e.target.value)}
+                              placeholder="—"
+                              className="w-full min-w-[66px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
+                            />
+                          </td>
+                          {cols.map(c => (
+                            <td key={c.key} className="border-b px-0.5 py-0.5">
+                              <input
+                                value={r.values[c.key] ?? ''}
+                                onChange={e => updateLedgerCell(r.id, c.key, e.target.value)}
+                                className="w-full min-w-[70px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
+                              />
+                            </td>
+                          ))}
+                          <td className="border-b px-1">
+                            <button
+                              type="button"
+                              onClick={() => removeLedgerRow(r.id)}
+                              className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              title="从总表删掉这一行"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* 视觉模型配置 */}
       <Card>

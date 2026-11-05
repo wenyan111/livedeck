@@ -112,6 +112,11 @@ export const IPC_CHANNELS = {
     // 表单数据持久化（防止 app 重启后已填数据丢失）
     getRows: 'dataEntry:getRows',
     saveRows: 'dataEntry:saveRows',
+    // 日报总表：所有板块的数据汇总成一张表，不用反复导出
+    getLedger: 'dataEntry:getLedger',
+    upsertLedger: 'dataEntry:upsertLedger',
+    saveLedger: 'dataEntry:saveLedger',
+    exportLedger: 'dataEntry:exportLedger',
   },
   // 配置迁移（导出/导入，换电脑时带走账号配置）
   configTransfer: {

@@ -2,6 +2,7 @@ import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import type { DashboardSnapshot, DouyinDashboardConfig } from './dashboard'
+import type { LedgerRecord } from './dataEntryLedger'
 import type { DataEntrySavedState } from './dataEntryState'
 import { IPC_CHANNELS } from './ipcChannels'
 import type { LiveReportColumn } from './liveReportColumns'
@@ -226,6 +227,15 @@ export interface IpcChannels {
   // 表单数据持久化
   [IPC_CHANNELS.dataEntry.getRows]: () => DataEntrySavedState | null
   [IPC_CHANNELS.dataEntry.saveRows]: (state: DataEntrySavedState) => void
+  // 日报总表（所有板块汇总成一张表）
+  [IPC_CHANNELS.dataEntry.getLedger]: () => LedgerRecord[]
+  [IPC_CHANNELS.dataEntry.upsertLedger]: (records: LedgerRecord[]) => LedgerRecord[]
+  [IPC_CHANNELS.dataEntry.saveLedger]: (records: LedgerRecord[]) => LedgerRecord[]
+  [IPC_CHANNELS.dataEntry.exportLedger]: (params: {
+    rows: Record<string, string>[]
+    columns: LiveReportColumn[]
+    outputPath: string
+  }) => string
 
   // 配置迁移（账号配置导出 / 导入）
   [IPC_CHANNELS.configTransfer.exportFile]: (payload: unknown) => string | null
