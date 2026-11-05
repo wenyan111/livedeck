@@ -227,6 +227,14 @@ export interface IpcChannels {
   // 表单数据持久化
   [IPC_CHANNELS.dataEntry.getRows]: () => DataEntrySavedState | null
   [IPC_CHANNELS.dataEntry.saveRows]: (state: DataEntrySavedState) => void
+  // 截图存档（下次打开还在）
+  [IPC_CHANNELS.dataEntry.getImages]: () => Record<
+    string,
+    { id: string; url: string; name: string; recognized?: boolean }[]
+  >
+  [IPC_CHANNELS.dataEntry.saveImages]: (
+    data: Record<string, { id: string; url: string; name: string; recognized?: boolean }[]>,
+  ) => void
   // 日报总表（所有板块汇总成一张表）
   [IPC_CHANNELS.dataEntry.getLedger]: () => LedgerRecord[]
   [IPC_CHANNELS.dataEntry.upsertLedger]: (records: LedgerRecord[]) => LedgerRecord[]

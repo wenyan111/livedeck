@@ -1106,6 +1106,21 @@ export default function DataEntry() {
   const clearPicks = (sectionKey: string) =>
     setPickedImages(prev => ({ ...prev, [sectionKey]: [] }))
 
+  /** 「清空图片」的二次确认状态（点一次变红，再点才真清） */
+  const [clearConfirm, setClearConfirm] = useState<Record<string, boolean>>({})
+  const clearAllImages = (sectionKey: string, platform: LiveControlPlatform) => {
+    if (!clearConfirm[sectionKey]) {
+      setClearConfirm(prev => ({ ...prev, [sectionKey]: true }))
+      // 3 秒没确认就自动收回，避免一直红着
+      setTimeout(() => setClearConfirm(prev => ({ ...prev, [sectionKey]: false })), 3000)
+      return
+    }
+    setImagesOf(platform, () => [])
+    clearPicks(sectionKey)
+    setClearConfirm(prev => ({ ...prev, [sectionKey]: false }))
+    toast.success('已清空截图，可以继续拖下一场的图了')
+  }
+
   // 支持从剪贴板粘贴截图（macOS 截屏后 Cmd+V / Windows Ctrl+V）
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -1290,6 +1305,35 @@ export default function DataEntry() {
       .then((all: LedgerRecord[]) => setLedger(all ?? []))
       .catch(() => {})
   }, [])
+
+  /**
+   * 截图记忆：打开时把上次拖进来的图恢复回来（含「已识别」标记），
+   * 之后每次增删/识别都防抖存盘（用户 2026-11-05 要求「下次打开上次的图片还在」）。
+   */
+  const imagesLoadedRef = useRef(false)
+  useEffect(() => {
+    window.ipcRenderer
+      .invoke(IPC_CHANNELS.dataEntry.getImages)
+      .then((data: Record<string, LocalImage[]>) => {
+        if (data && Object.keys(data).length > 0) {
+          setImagesByPlatform(data)
+          imagesRef.current = data
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        imagesLoadedRef.current = true
+      })
+  }, [])
+
+  useEffect(() => {
+    // 还没把上次的图读回来就别存，否则会用空列表把存档冲掉
+    if (!imagesLoadedRef.current) return
+    const t = setTimeout(() => {
+      window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveImages, imagesByPlatform).catch(() => {})
+    }, 800)
+    return () => clearTimeout(t)
+  }, [imagesByPlatform])
 
   /** 表单数据自动存档：任何修改（填字/识别/增删行/切换行）后防抖落盘，重启不再丢 */
   useEffect(() => {
@@ -1835,6 +1879,19 @@ export default function DataEntry() {
                     <Button size="sm" onClick={() => fileInputs.current[pk]?.click()}>
                       选择截图
                     </Button>
+                    {/* 下播后换下一场：一键清空，图片和「已识别」标记一起清掉 */}
+                    {pfImages.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant={clearConfirm[pf] ? 'destructive' : 'outline'}
+                        onClick={() => clearAllImages(pf, pk)}
+                        disabled={recognizing}
+                        title="清空这个板块里的全部截图，方便接着录下一场"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1" />
+                        {clearConfirm[pf] ? `确认清空 ${pfImages.length} 张？` : '清空图片'}
+                      </Button>
+                    )}
                     {/* 识别中：同一个位置变成「暂停识别」，跑完当前这次模型调用就停 */}
                     {pfRunning ? (
                       <Button

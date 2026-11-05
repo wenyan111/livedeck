@@ -1,5 +1,6 @@
 import { dialog } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import { dataEntryImagesService } from '#/services/DataEntryImagesService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
 import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
 import { liveReportLedgerService } from '#/services/LiveReportLedgerService'
@@ -88,6 +89,15 @@ function setupIpcHandlers() {
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveRows, async (_, state) => {
     await dataEntryStateService.saveState(state)
+  })
+
+  // ── 截图存档（下次打开还在） ──
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.getImages, async () => {
+    return await dataEntryImagesService.load()
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveImages, async (_, data) => {
+    await dataEntryImagesService.save(data)
   })
 
   // ── 日报总表（所有板块汇总成一张表） ──
