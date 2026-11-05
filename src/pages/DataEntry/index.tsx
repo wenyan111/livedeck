@@ -2552,11 +2552,6 @@ export default function DataEntry() {
                 <Input
                   value={config.model}
                   onChange={e => setModelValue(volcMode, e.target.value)}
-                  list={
-                    config.provider === 'volcengine' && volcMode === 'model'
-                      ? 'vision-model-suggest'
-                      : undefined
-                  }
                   placeholder={
                     config.provider !== 'volcengine'
                       ? '如 glm-4v-plus'
@@ -2567,12 +2562,7 @@ export default function DataEntry() {
                 />
                 {config.provider === 'volcengine' && volcMode === 'model' && (
                   <>
-                    <datalist id="vision-model-suggest">
-                      {VOLC_VISION_MODELS.map(m => (
-                        <option key={m.id} value={m.id} />
-                      ))}
-                    </datalist>
-                    {/* 一键切常用型号；也可以直接在上面填自己控制台的接入点 ep-xxx */}
+                    {/* 一键切常用型号；浏览器原生的 datalist 下拉会挡住下面的按钮，已去掉 */}
                     <div className="flex flex-wrap gap-1">
                       {VOLC_VISION_MODELS.map(m => (
                         <button
