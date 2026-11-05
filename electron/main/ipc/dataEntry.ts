@@ -1,12 +1,15 @@
-import { dialog } from 'electron'
+import path from 'node:path'
+import { app, dialog } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { dataEntryImagesService } from '#/services/DataEntryImagesService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
+import { ledgerSyncService } from '#/services/LedgerSyncService'
 import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
 import { liveReportLedgerService } from '#/services/LiveReportLedgerService'
 import { tableFileService } from '#/services/TableFileService'
 import { VisionRecognizer } from '#/services/VisionRecognizer'
 import { visionTemplateService } from '#/services/VisionTemplateService'
+import { xlsxExportService } from '#/services/XlsxExportService'
 import { typedIpcMainHandle } from '#/utils'
 
 const visionRecognizer = new VisionRecognizer()
@@ -116,6 +119,34 @@ function setupIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.exportLedger, async (_, params) => {
     // 总表的「板块 / 平台」两列由渲染进程拼好，这里只负责落盘
     return await tableFileService.exportRows(params.rows, params.outputPath, params.columns)
+  })
+
+  // ── 实时同步到本机表格（xlsx） ──
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.getLedgerSync, async () => {
+    return await ledgerSyncService.load()
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.setLedgerSync, async (_, config) => {
+    return await ledgerSyncService.save(config)
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.chooseLedgerSyncPath, async () => {
+    const defaultPath = path.join(app.getPath('documents'), '直播日报总表.xlsx')
+    const result = await dialog.showSaveDialog({
+      title: '选择总表要实时写入的表格文件',
+      defaultPath,
+      buttonLabel: '同步到这个文件',
+      filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    // 用户没写扩展名时补上 .xlsx，否则 Excel 打不开
+    return result.filePath.toLowerCase().endsWith('.xlsx')
+      ? result.filePath
+      : `${result.filePath}.xlsx`
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.syncLedgerXlsx, async (_, params) => {
+    return await xlsxExportService.writeLedgerXlsx(params.rows, params.columns, params.outputPath)
   })
 }
 

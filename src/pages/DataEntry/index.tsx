@@ -2,6 +2,7 @@ import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import {
   ChevronDown,
   ChevronUp,
+  FileSpreadsheet,
   MapPin,
   MessageSquarePlus,
   Pause,
@@ -23,6 +24,7 @@ import {
 } from 'shared/dataEntryLedger'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import type { LedgerSyncConfig } from 'shared/ledgerSync'
 import {
   COMPUTED_DEPENDENCY_KEYS,
   computeDerivedValues,
@@ -81,6 +83,19 @@ interface DataRow {
   platform: LiveControlPlatform
   values: Record<string, string>
   lowConfidence: string[]
+}
+
+/** 总表排序：日期新的在上，同一天早场在前，再按更新时间倒序 */
+function sortLedgerDesc(records: LedgerRecord[]): LedgerRecord[] {
+  return [...records].sort((a, b) => {
+    const da = a.values.date ?? ''
+    const db = b.values.date ?? ''
+    if (da !== db) return db.localeCompare(da)
+    const sa = a.values.session ?? ''
+    const sb = b.values.session ?? ''
+    if (sa !== sb) return sa.localeCompare(sb)
+    return b.updatedAt - a.updatedAt
+  })
 }
 
 /** 把已有行的数据按新列定义重新对齐：保留仍存在的列值，丢掉已删列，新增列置空，并重算派生列 */
@@ -718,8 +733,16 @@ function ColumnManagerModal({
 
 export default function DataEntry() {
   const { toast } = useToast()
-  const { config, apiKeys, customBaseURL, setConfig, setApiKey, setCustomBaseURL } =
-    useAIProvider('vision')
+  const {
+    config,
+    apiKeys,
+    customBaseURL,
+    setConfig,
+    setApiKey,
+    setCustomBaseURL,
+    setModelValue,
+    switchModelMode,
+  } = useAIProvider('vision')
 
   /**
    * 页面视图：分板块录入 / 总表。
@@ -730,6 +753,16 @@ export default function DataEntry() {
   const [ledger, setLedger] = useState<LedgerRecord[]>([])
   /** 总表筛选：看哪个板块（'' = 全部） */
   const [ledgerFilter, setLedgerFilter] = useState('')
+  /**
+   * 实时同步：总表一有变化就把整张表写进用户指定的 .xlsx，
+   * 这样数据直接落在电脑上的表格里，不用每次点「导出整表」（用户 2026-11-05 需求）。
+   */
+  const [ledgerSync, setLedgerSync] = useState<LedgerSyncConfig>({
+    enabled: false,
+    filePath: '',
+  })
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null)
   /**
    * 方舟用哪种方式调模型：
    * - model：直接填模型 ID（需在方舟开通该模型）
@@ -1328,6 +1361,16 @@ export default function DataEntry() {
       .catch(() => {})
   }, [])
 
+  /** 读取「实时同步」的开关与目标文件（上次开着的，重启后继续开着） */
+  useEffect(() => {
+    window.ipcRenderer
+      .invoke(IPC_CHANNELS.dataEntry.getLedgerSync)
+      .then((cfg: LedgerSyncConfig) => {
+        if (cfg) setLedgerSync(cfg)
+      })
+      .catch(() => {})
+  }, [])
+
   /**
    * 截图记忆：打开时把上次拖进来的图恢复回来（含「已识别」标记），
    * 之后每次增删/识别都防抖存盘（用户 2026-11-05 要求「下次打开上次的图片还在」）。
@@ -1400,18 +1443,44 @@ export default function DataEntry() {
 
   // ── 总表：表头（各板块字段并集）、排序后的行 ──
   const ledgerColumns = useMemo(() => buildLedgerColumns(columns), [columns])
-  const ledgerRows = useMemo(() => {
-    const list = ledgerFilter ? ledger.filter(r => r.sectionKey === ledgerFilter) : ledger
-    return [...list].sort((a, b) => {
-      const da = a.values.date ?? ''
-      const db = b.values.date ?? ''
-      if (da !== db) return db.localeCompare(da) // 日期新的在上
-      const sa = a.values.session ?? ''
-      const sb = b.values.session ?? ''
-      if (sa !== sb) return sa.localeCompare(sb)
-      return b.updatedAt - a.updatedAt
-    })
-  }, [ledger, ledgerFilter])
+  const ledgerRows = useMemo(
+    () => sortLedgerDesc(ledgerFilter ? ledger.filter(r => r.sectionKey === ledgerFilter) : ledger),
+    [ledger, ledgerFilter],
+  )
+
+  /**
+   * 导出 / 实时同步用的整表数据：不跟总表上方的板块筛选走（永远是整张表），
+   * 并在最前面补「板块」「平台」两列（用户 2026-11-05 反馈表里要能看出数据来自哪）。
+   */
+  const ledgerExportPayload = useMemo(() => {
+    const head: LiveReportColumn[] = [
+      {
+        key: '__section',
+        label: '板块',
+        unit: 'text',
+        source: 'manual',
+        group: '总表',
+        platform: 'douyin',
+      },
+      {
+        key: '__platform',
+        label: '平台',
+        unit: 'text',
+        source: 'manual',
+        group: '总表',
+        platform: 'douyin',
+      },
+    ]
+    const rows = sortLedgerDesc(ledger).map(r => ({
+      ...r.values,
+      __section: r.sectionName,
+      __platform: platformLabels[r.platform] ?? r.platform,
+    }))
+    return { rows, columns: [...head, ...ledgerColumns] }
+  }, [ledger, ledgerColumns])
+
+  /** 同步目标文件名（按钮上显示，路径放在 tooltip 里） */
+  const syncFileName = ledgerSync.filePath.split('/').pop() || ''
 
   /**
    * 总表里直接改一个格子。
@@ -1454,46 +1523,95 @@ export default function DataEntry() {
 
   /** 一次性导出整张总表（所有板块、所有日期） */
   const handleExportLedger = useCallback(async () => {
-    if (ledgerRows.length === 0) {
+    if (ledgerExportPayload.rows.length === 0) {
       toast.error('总表还是空的，先在录入页识别/填写数据')
       return
     }
     const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
     if (!outputPath) return
-    const head: LiveReportColumn[] = [
-      {
-        key: '__section',
-        label: '板块',
-        unit: 'text',
-        source: 'manual',
-        group: '总表',
-        platform: 'douyin',
-      },
-      {
-        key: '__platform',
-        label: '平台',
-        unit: 'text',
-        source: 'manual',
-        group: '总表',
-        platform: 'douyin',
-      },
-    ]
-    const rows = ledgerRows.map(r => ({
-      ...r.values,
-      __section: r.sectionName,
-      __platform: platformLabels[r.platform] ?? r.platform,
-    }))
     try {
       await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportLedger, {
-        rows,
-        columns: [...head, ...ledgerColumns],
+        rows: ledgerExportPayload.rows,
+        columns: ledgerExportPayload.columns,
         outputPath,
       })
-      toast.success(`已导出 ${rows.length} 行整表到 ${outputPath}`)
+      toast.success(`已导出 ${ledgerExportPayload.rows.length} 行整表到 ${outputPath}`)
     } catch (error) {
       toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
     }
-  }, [ledgerRows, ledgerColumns, toast])
+  }, [ledgerExportPayload, toast])
+
+  /** 把当前整表写进同步目标文件（内部用，不弹提示） */
+  const writeLedgerSync = useCallback(
+    async (outputPath: string) => {
+      if (!outputPath) return
+      setSyncing(true)
+      try {
+        await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.syncLedgerXlsx, {
+          rows: ledgerExportPayload.rows,
+          columns: ledgerExportPayload.columns,
+          outputPath,
+        })
+        setLastSyncedAt(Date.now())
+      } catch (error) {
+        toast.error(`同步失败：${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setSyncing(false)
+      }
+    },
+    [ledgerExportPayload, toast],
+  )
+
+  /** 开启实时同步：先选（或沿用上次的）目标文件，再立刻写一次 */
+  const handleStartLedgerSync = useCallback(async () => {
+    let filePath = ledgerSync.filePath
+    // 第一次开启要选文件；之前选过就直接沿用，想换位置点「换文件」
+    filePath = (await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.chooseLedgerSyncPath)) ?? ''
+    if (!filePath) return
+    try {
+      const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.setLedgerSync, {
+        enabled: true,
+        filePath,
+      })
+      setLedgerSync(saved)
+      await writeLedgerSync(saved.filePath)
+      toast.success(`已开始实时同步，数据会随时写进 ${saved.filePath}`)
+    } catch (error) {
+      toast.error(`开启同步失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [ledgerSync.filePath, writeLedgerSync, toast])
+
+  /** 停止同步（保留目标路径，下次开起来还是这个文件） */
+  const handleStopLedgerSync = useCallback(async () => {
+    const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.setLedgerSync, {
+      enabled: false,
+      filePath: ledgerSync.filePath,
+    })
+    setLedgerSync(saved)
+    toast.success('已停止实时同步，已写入的数据不动')
+  }, [ledgerSync.filePath, toast])
+
+  /** 立刻同步一次（等不及防抖，或想确认文件是最新的） */
+  const handleSyncNow = useCallback(async () => {
+    if (!ledgerSync.filePath) {
+      await handleStartLedgerSync()
+      return
+    }
+    await writeLedgerSync(ledgerSync.filePath)
+    toast.success(`已同步 ${ledgerExportPayload.rows.length} 行 → ${ledgerSync.filePath}`)
+  }, [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast])
+
+  /**
+   * 总表变了就自动写文件（防抖 900ms，避免连续敲字时反复写盘）。
+   * 关着的时候只是空转，不产生任何 IO。
+   */
+  useEffect(() => {
+    if (!ledgerSync.enabled || !ledgerSync.filePath) return
+    const timer = setTimeout(() => {
+      void writeLedgerSync(ledgerSync.filePath)
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [ledgerSync.enabled, ledgerSync.filePath, writeLedgerSync])
 
   /** 校准模板：用该平台的第一张截图 + 该平台当前行数据作为已知值 */
   const handleCalibrate = useCallback(
@@ -2192,6 +2310,12 @@ export default function DataEntry() {
                 <CardDescription className="text-xs">
                   共 {ledger.length} 条记录 · 按「日期 + 板块 +
                   场次」自动去重；格子里可以直接改，改完自动存
+                  {ledgerSync.enabled && (
+                    <span className="block text-[11px] text-muted-foreground/80">
+                      实时写入 {syncFileName}
+                      （这个文件由软件覆盖写入，别在里面改，改了会被下次同步冲掉）
+                    </span>
+                  )}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2215,6 +2339,38 @@ export default function DataEntry() {
                   <Table className="w-4 h-4 mr-1" />
                   导出整表（{ledgerRows.length} 行）
                 </Button>
+                {/* 实时同步：总表一变就把整张表写进你电脑上的 .xlsx，不用反复导出 */}
+                {ledgerSync.enabled ? (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={handleSyncNow}
+                      disabled={syncing}
+                      title={`${ledgerSync.filePath}\n${
+                        lastSyncedAt
+                          ? `上次同步 ${new Date(lastSyncedAt).toLocaleTimeString()}`
+                          : ''
+                      }`}
+                    >
+                      <FileSpreadsheet className="w-4 h-4 mr-1" />
+                      {syncing ? '同步中…' : `已同步 · ${syncFileName}`}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleStopLedgerSync}
+                      title="停止实时同步（已写入的数据不受影响）"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={handleStartLedgerSync}>
+                    <FileSpreadsheet className="w-4 h-4 mr-1" />
+                    实时同步到表格
+                  </Button>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -2363,7 +2519,8 @@ export default function DataEntry() {
                       type="button"
                       onClick={() => {
                         setVolcMode('model')
-                        if (config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                        // 回填上次填过的模型 ID（不清空 —— 清空会把用户刚粘的 ep 弄丢）
+                        switchModelMode('model')
                         toast.success('已切到「模型 ID」：填 doubao-xxx，需在方舟先开通该模型')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
@@ -2378,7 +2535,8 @@ export default function DataEntry() {
                       type="button"
                       onClick={() => {
                         setVolcMode('endpoint')
-                        if (!config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                        // 回填上次粘过的接入点（模型 ID 那份另外存着，切回去还在）
+                        switchModelMode('endpoint')
                         toast.success('已切到「接入点」：把方舟控制台里的 ep-xxxxxxxx 粘进来')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
@@ -2393,7 +2551,7 @@ export default function DataEntry() {
                 )}
                 <Input
                   value={config.model}
-                  onChange={e => setConfig({ model: e.target.value })}
+                  onChange={e => setModelValue(volcMode, e.target.value)}
                   list={
                     config.provider === 'volcengine' && volcMode === 'model'
                       ? 'vision-model-suggest'
@@ -2420,7 +2578,7 @@ export default function DataEntry() {
                         <button
                           key={m.id}
                           type="button"
-                          onClick={() => setConfig({ model: m.id })}
+                          onClick={() => setModelValue('model', m.id)}
                           className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
                             config.model === m.id
                               ? 'border-primary bg-primary/10 text-primary'
@@ -2438,11 +2596,18 @@ export default function DataEntry() {
                   </>
                 )}
                 {config.provider === 'volcengine' && volcMode === 'endpoint' && (
-                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    去方舟控制台 →「在线推理」→ 创建接入点 → 选中 doubao 视觉模型 → 把生成的{' '}
-                    <code className="px-0.5">ep-xxxxxxxx</code>
-                    填到这里。这个方式不用额外开通模型，但每换一个模型都要建一个新接入点。
-                  </p>
+                  <>
+                    {config.model.trim().startsWith('ep-') && (
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                        ✓ 已记住这个接入点，下次打开还在；切到「模型 ID」也不会丢
+                      </p>
+                    )}
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      去方舟控制台 →「在线推理」→ 创建接入点 → 选中 doubao 视觉模型 → 把生成的{' '}
+                      <code className="px-0.5">ep-xxxxxxxx</code>
+                      填到这里。这个方式不用额外开通模型，但每换一个模型都要建一个新接入点。
+                    </p>
+                  </>
                 )}
               </div>
             )}

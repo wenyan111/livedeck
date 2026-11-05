@@ -16,9 +16,22 @@ export interface ProviderConfig {
   modelPreferences: {
     [key in AIProvider]: string
   }
+  /**
+   * 「接入点 ep-xxx」模式下每个服务商各自记住的值。
+   *
+   * 为什么单独存一份：模型 ID 和接入点是两种互斥的填法，
+   * 早先的做法是「切模式就把输入框清空」，用户切一下就把刚粘进去的 ep 弄丢了
+   * （2026-11-05 用户报「我填过了但是没有记住」）。现在两边各记一份，切来切去都还在。
+   */
+  endpointPreferences: {
+    [key in AIProvider]: string
+  }
 }
 
 export type AIConfigType = 'chat' | 'autoReply' | 'dashboard' | 'vision'
+
+/** 模型这一栏的两种填法：直连模型 ID / 方舟推理接入点 */
+export type ModelInputMode = 'model' | 'endpoint'
 
 interface AIConfig {
   config: ProviderConfig
@@ -34,6 +47,10 @@ interface AIProviderStore {
   setCustomBaseURL: (type: AIConfigType, url: string) => void
   setConfig: (type: AIConfigType, config: Partial<ProviderConfig>) => void
   setApiKey: (type: AIConfigType, provider: AIProvider, key: string) => void
+  /** 写「模型」这一栏，并按当前模式记进对应的偏好表（model / endpoint 各一份） */
+  setModelValue: (type: AIConfigType, mode: ModelInputMode, value: string) => void
+  /** 切换填法：把该模式下上次填过的值回填到输入框（不清空） */
+  switchModelMode: (type: AIConfigType, mode: ModelInputMode) => void
 }
 
 const createDefaultConfig = (): ProviderConfig => {
@@ -44,12 +61,27 @@ const createDefaultConfig = (): ProviderConfig => {
     },
     {} as Record<string, string>,
   )
+  const endpointPreferences = Object.keys(providers).reduce(
+    (acc, provider) => {
+      acc[provider] = ''
+      return acc
+    },
+    {} as Record<string, string>,
+  )
 
   return {
     provider: 'deepseek',
     model: providers.deepseek.models[0],
     modelPreferences,
+    endpointPreferences,
   }
+}
+
+/** 老数据没有 endpointPreferences 字段，读的时候补齐，避免 set 时 undefined 崩 */
+const ensurePreferences = (config: ProviderConfig): ProviderConfig => {
+  if (!config.endpointPreferences) config.endpointPreferences = {}
+  if (!config.modelPreferences) config.modelPreferences = {}
+  return config
 }
 
 const createDefaultApiKeys = (): APIKeys => {
@@ -83,7 +115,7 @@ export const useAIProviderStore = create<AIProviderStore>()(
         },
         setConfig: (type, config) => {
           set(state => {
-            const currentConfig = state[type].config
+            const currentConfig = ensurePreferences(state[type].config)
             if (config.provider) {
               const newModel = config.model || currentConfig.modelPreferences[config.provider]
               state[type].config.provider = config.provider
@@ -97,6 +129,30 @@ export const useAIProviderStore = create<AIProviderStore>()(
               if (config.model)
                 state[type].config.modelPreferences[currentConfig.provider] = config.model
             }
+          })
+        },
+        setModelValue: (type, mode, value) => {
+          set(state => {
+            const currentConfig = ensurePreferences(state[type].config)
+            state[type].config.model = value
+            // 只有非空才写偏好，否则用户清空一下就再也回不来了
+            if (value) {
+              if (mode === 'endpoint') {
+                state[type].config.endpointPreferences[currentConfig.provider] = value
+              } else {
+                state[type].config.modelPreferences[currentConfig.provider] = value
+              }
+            }
+          })
+        },
+        switchModelMode: (type, mode) => {
+          set(state => {
+            const currentConfig = ensurePreferences(state[type].config)
+            const provider = currentConfig.provider
+            state[type].config.model =
+              mode === 'endpoint'
+                ? (currentConfig.endpointPreferences[provider] ?? '')
+                : (currentConfig.modelPreferences[provider] ?? '')
           })
         },
         setApiKey: (type, provider, key) => {
@@ -114,7 +170,7 @@ export const useAIProviderStore = create<AIProviderStore>()(
         dashboard: state.dashboard,
         vision: state.vision,
       }),
-      version: 1,
+      version: 2,
       migrate: (persistedState: unknown, version: number) => {
         // 从原先 useAIChat 旧版本迁移
         if (version === 0) {
@@ -124,6 +180,14 @@ export const useAIProviderStore = create<AIProviderStore>()(
             autoReply: cloneDeep(oldState),
           }
           return migratedState
+        }
+        // v1 → v2：给每个配置补上「接入点」偏好表（老数据没这个字段）
+        if (version === 1) {
+          const state = (persistedState ?? {}) as Record<string, AIConfig>
+          for (const key of ['chat', 'autoReply', 'dashboard', 'vision']) {
+            if (state[key]?.config) ensurePreferences(state[key].config)
+          }
+          return state
         }
         return persistedState
       },
@@ -143,6 +207,12 @@ export function useAIProvider(type: AIConfigType) {
     },
     setCustomBaseURL: (url: string) => {
       store.setCustomBaseURL(type, url)
+    },
+    setModelValue: (mode: ModelInputMode, value: string) => {
+      store.setModelValue(type, mode, value)
+    },
+    switchModelMode: (mode: ModelInputMode) => {
+      store.switchModelMode(type, mode)
     },
   }
   return {

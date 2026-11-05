@@ -5,6 +5,7 @@ import type { DashboardSnapshot, DouyinDashboardConfig } from './dashboard'
 import type { LedgerRecord } from './dataEntryLedger'
 import type { DataEntrySavedState } from './dataEntryState'
 import { IPC_CHANNELS } from './ipcChannels'
+import type { LedgerSyncConfig } from './ledgerSync'
 import type { LiveReportColumn } from './liveReportColumns'
 
 export interface IpcChannels {
@@ -240,6 +241,16 @@ export interface IpcChannels {
   [IPC_CHANNELS.dataEntry.upsertLedger]: (records: LedgerRecord[]) => LedgerRecord[]
   [IPC_CHANNELS.dataEntry.saveLedger]: (records: LedgerRecord[]) => LedgerRecord[]
   [IPC_CHANNELS.dataEntry.exportLedger]: (params: {
+    rows: Record<string, string>[]
+    columns: LiveReportColumn[]
+    outputPath: string
+  }) => string
+  // 实时同步到本机表格（xlsx）
+  [IPC_CHANNELS.dataEntry.getLedgerSync]: () => LedgerSyncConfig
+  [IPC_CHANNELS.dataEntry.setLedgerSync]: (config: LedgerSyncConfig) => LedgerSyncConfig
+  /** 弹系统保存框选目标文件；用户取消返回 null */
+  [IPC_CHANNELS.dataEntry.chooseLedgerSyncPath]: () => string | null
+  [IPC_CHANNELS.dataEntry.syncLedgerXlsx]: (params: {
     rows: Record<string, string>[]
     columns: LiveReportColumn[]
     outputPath: string

@@ -120,6 +120,11 @@ export const IPC_CHANNELS = {
     upsertLedger: 'dataEntry:upsertLedger',
     saveLedger: 'dataEntry:saveLedger',
     exportLedger: 'dataEntry:exportLedger',
+    // 实时同步到本机 xlsx（总表一有变化就写进用户指定的表格文件）
+    getLedgerSync: 'dataEntry:getLedgerSync',
+    setLedgerSync: 'dataEntry:setLedgerSync',
+    chooseLedgerSyncPath: 'dataEntry:chooseLedgerSyncPath',
+    syncLedgerXlsx: 'dataEntry:syncLedgerXlsx',
   },
   // 配置迁移（导出/导入，换电脑时带走账号配置）
   configTransfer: {
