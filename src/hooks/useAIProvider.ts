@@ -72,10 +72,10 @@ export const useAIProviderStore = create<AIProviderStore>()(
   persist(
     immer(set => {
       return {
-      chat: createDefaultAIConfig(),
-      autoReply: createDefaultAIConfig(),
-      dashboard: createDefaultAIConfig(),
-      vision: createDefaultAIConfig(),
+        chat: createDefaultAIConfig(),
+        autoReply: createDefaultAIConfig(),
+        dashboard: createDefaultAIConfig(),
+        vision: createDefaultAIConfig(),
         setCustomBaseURL: (type, url) => {
           set(state => {
             state[type].customBaseURL = url
@@ -89,9 +89,13 @@ export const useAIProviderStore = create<AIProviderStore>()(
               state[type].config.provider = config.provider
               state[type].config.model = newModel
               state[type].config.modelPreferences[config.provider] = newModel
-            } else if (config.model) {
+            } else if (config.model !== undefined) {
+              // 注意：以前写成 `else if (config.model)`，空字符串会被当成"没传"忽略，
+              // 于是「切到接入点模式时清空模型」这类操作根本没生效（2026-11-05 用户报「点了不切换」）。
               state[type].config.model = config.model
-              state[type].config.modelPreferences[currentConfig.provider] = config.model
+              // 记住偏好，但不把空值覆盖进去（否则切回来是空的）
+              if (config.model)
+                state[type].config.modelPreferences[currentConfig.provider] = config.model
             }
           })
         },

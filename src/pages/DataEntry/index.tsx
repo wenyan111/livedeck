@@ -2364,6 +2364,7 @@ export default function DataEntry() {
                       onClick={() => {
                         setVolcMode('model')
                         if (config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                        toast.success('已切到「模型 ID」：填 doubao-xxx，需在方舟先开通该模型')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
                         volcMode === 'model'
@@ -2378,6 +2379,7 @@ export default function DataEntry() {
                       onClick={() => {
                         setVolcMode('endpoint')
                         if (!config.model.trim().startsWith('ep-')) setConfig({ model: '' })
+                        toast.success('已切到「接入点」：把方舟控制台里的 ep-xxxxxxxx 粘进来')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
                         volcMode === 'endpoint'
@@ -2392,7 +2394,11 @@ export default function DataEntry() {
                 <Input
                   value={config.model}
                   onChange={e => setConfig({ model: e.target.value })}
-                  list={config.provider === 'volcengine' ? 'vision-model-suggest' : undefined}
+                  list={
+                    config.provider === 'volcengine' && volcMode === 'model'
+                      ? 'vision-model-suggest'
+                      : undefined
+                  }
                   placeholder={
                     config.provider !== 'volcengine'
                       ? '如 glm-4v-plus'
