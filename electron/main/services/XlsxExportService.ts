@@ -4,12 +4,54 @@ import ExcelJS from 'exceljs'
 import type { LiveReportColumn } from 'shared/liveReportColumns'
 import { createLogger } from '#/logger'
 
+/** 一个中文/全角字符在 Excel 里约占 2 个半角宽度 */
+function displayWidth(text: string): number {
+  let width = 0
+  for (const ch of String(text ?? '')) {
+    width +=
+      /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uff60\uffe0-\uffe6]/.test(ch)
+        ? 2
+        : 1
+  }
+  return width
+}
+
+/**
+ * 纯数字写成真正的数值。
+ * 之前所有值都按文本写，Excel/WPS 会在每个数字格左上角挂绿色小三角
+ * 「以文本形式存储的数字」（2026-11-05 用户要求「这些绿标去掉」）。
+ * 日期（2026/11/04）、时间段（6:48-9:19）、百分比、名称都保持文本。
+ */
+function toCellValue(raw: unknown): string | number | null {
+  const text = String(raw ?? '').trim()
+  if (!text) return null
+  if (/^[-+]?\d+(\.\d+)?$/.test(text)) return Number(text)
+  if (/^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(text)) {
+    return Number(text.replace(/,/g, ''))
+  }
+  return String(raw)
+}
+
+/** 这几列即便全空也要留着，否则表就看不懂了 */
+const ALWAYS_KEEP_KEYS = new Set(['__section', '__platform', 'date', 'session', 'weekLabel'])
+
+/** 参考「英子数据记录.xlsx」的排版：微软雅黑 11、四边细边框、居中、白底 */
+const CELL_BORDER: ExcelJS.Borders = {
+  left: { style: 'thin', color: { argb: 'FF9AA4AD' } },
+  right: { style: 'thin', color: { argb: 'FF9AA4AD' } },
+  top: { style: 'thin', color: { argb: 'FF9AA4AD' } },
+  bottom: { style: 'thin', color: { argb: 'FF9AA4AD' } },
+  diagonal: {},
+}
+
 /**
  * 把日报总表写成真正的 .xlsx（Excel / WPS / Numbers 都能直接打开）。
  *
- * 用户 2026-11-05 需求：软件里填完的数据想「实时落到我电脑上的表格里」，
- * 所以这里每次都用「写临时文件 → rename 原子替换」，
- * 保证任何时刻读到的都是一个完整可打开的 xlsx（哪怕软件在写盘中途崩了）。
+ * 排版照用户给的「英子数据记录.xlsx」来：白底、每格四边细边框、微软雅黑 11、
+ * 全部居中、表头行高 40 / 数据行 24、列宽跟着内容走、冻结表头与前几列。
+ * 另外：整列全空的列不写（总表是所有板块字段的并集，留着就是一大片空白），
+ * 数字写成数值类型（消掉 Excel 的绿色小三角）。
+ * 落盘用「写临时文件 → rename 原子替换」，任何时刻读到的都是完整文件。
  */
 export class XlsxExportService {
   private logger = createLogger('表格同步')
@@ -19,56 +61,53 @@ export class XlsxExportService {
     columns: LiveReportColumn[],
     outputPath: string,
   ): Promise<string> {
+    // ① 丢掉全空列：用户只用了一个板块时，别的板块那几十列就别占地方了
+    const usedColumns = columns.filter(c => {
+      if (ALWAYS_KEEP_KEYS.has(c.key)) return true
+      return rows.some(row => String(row[c.key] ?? '').trim() !== '')
+    })
+
     const workbook = new ExcelJS.Workbook()
     workbook.creator = 'LiveDeck・直播台'
     workbook.created = new Date()
 
     const sheet = workbook.addWorksheet('日报总表', {
-      views: [{ state: 'frozen', ySplit: 1, xSplit: 3 }],
+      views: [
+        {
+          state: 'frozen',
+          ySplit: 1,
+          xSplit: Math.min(6, usedColumns.length),
+          showGridLines: false,
+        },
+      ],
     })
 
-    sheet.columns = columns.map(c => ({
-      header: c.label,
-      key: c.key,
-      width: Math.min(Math.max(c.label.length * 2 + 6, 10), 26),
-    }))
+    // ② 列宽自适应：以实际数据为主，长表头折行，不再把整列撑宽
+    sheet.columns = usedColumns.map(c => {
+      let maxData = 0
+      for (const row of rows) {
+        maxData = Math.max(maxData, displayWidth(String(row[c.key] ?? '')))
+      }
+      const width = Math.min(Math.max(maxData + 3, Math.min(displayWidth(c.label), 12) + 2, 9), 22)
+      return { header: c.label, key: c.key, width }
+    })
 
     for (const row of rows) {
-      sheet.addRow(row)
+      sheet.addRow(usedColumns.map(c => toCellValue(row[c.key])))
     }
 
-    // 表头样式：加粗 + 浅灰底 + 居中，冻结首行方便滚动
-    const header = sheet.getRow(1)
-    header.font = { bold: true, size: 11 }
-    header.alignment = { vertical: 'middle', horizontal: 'center' }
-    header.height = 22
-    for (let i = 1; i <= columns.length; i++) {
-      header.getCell(i).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFEDEFF2' },
-      }
-      header.getCell(i).border = {
-        bottom: { style: 'thin', color: { argb: 'FFB9BEC6' } },
-      }
-    }
-    // 数据区：细边框 + 单元格允许换行，长文本不撑破列宽
-    for (let r = 2; r <= sheet.rowCount; r++) {
+    // ③ 逐格套参考表样式：白底 + 四边细边框 + 居中 + 自动换行
+    for (let r = 1; r <= sheet.rowCount; r++) {
       const line = sheet.getRow(r)
-      for (let c = 1; c <= columns.length; c++) {
-        const cell = line.getCell(c)
-        cell.alignment = { vertical: 'middle', wrapText: true }
-        cell.border = {
-          bottom: { style: 'hair', color: { argb: 'FFE3E6EA' } },
-        }
+      line.height = r === 1 ? 40 : 24
+      line.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
+      line.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FF1F2933' } }
+      for (let c = 1; c <= usedColumns.length; c++) {
+        line.getCell(c).border = CELL_BORDER
       }
     }
-    if (columns.length > 0) {
-      sheet.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: 1, column: columns.length },
-      }
-    }
+
+    sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1 }
 
     const buffer = await workbook.xlsx.writeBuffer()
 
@@ -81,7 +120,9 @@ export class XlsxExportService {
     await fs.writeFile(tmpPath, Buffer.from(buffer))
     await this.renameWithRetry(tmpPath, outputPath)
 
-    this.logger.info(`同步 ${rows.length} 行到 ${outputPath}`)
+    this.logger.info(
+      `同步 ${rows.length} 行 / ${usedColumns.length} 列（原始 ${columns.length} 列，已隐藏空列）到 ${outputPath}`,
+    )
     return outputPath
   }
 
@@ -99,7 +140,6 @@ export class XlsxExportService {
         await new Promise(resolve => setTimeout(resolve, 120 * (attempt + 1)))
       }
     }
-    // 兜底：清掉临时文件，抛给上层提示用户
     await fs.unlink(from).catch(() => {})
     throw lastError
   }

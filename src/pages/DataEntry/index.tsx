@@ -50,7 +50,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useAIProvider } from '@/hooks/useAIProvider'
+import type { ModelInputMode } from '@/hooks/useAIProvider'
+import { getEffectiveModel, getEndpointForCurrentModel, useAIProvider } from '@/hooks/useAIProvider'
 import { useToast } from '@/hooks/useToast'
 
 /**
@@ -83,6 +84,23 @@ interface DataRow {
   platform: LiveControlPlatform
   values: Record<string, string>
   lowConfidence: string[]
+}
+
+/**
+ * 总表「平台」列按日报口径写大平台名，而不是中控台后台名。
+ * 之前直接用 platformLabels[sectionKey] 会把巨量百应写成「抖音小店」，
+ * 与日报里的「抖音 / 视频号 / 小红书 / 淘宝 / 快手」对不上（2026-11-05 用户指出「这里不对」）。
+ */
+const PLATFORM_GROUP_LABELS: Record<string, string> = {
+  douyin: '抖音',
+  buyin: '抖音',
+  eos: '抖音',
+  wxchannel: '视频号',
+  xiaohongshu: '小红书',
+  pgy: '小红书',
+  kuaishou: '快手',
+  taobao: '淘宝',
+  dev: '测试',
 }
 
 /** 总表排序：日期新的在上，同一天早场在前，再按更新时间倒序 */
@@ -764,14 +782,20 @@ export default function DataEntry() {
   const [syncing, setSyncing] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null)
   /**
-   * 方舟用哪种方式调模型：
+   * 方舟用哪种方式调模型（存在配置里，下次打开还是这个模式）：
    * - model：直接填模型 ID（需在方舟开通该模型）
    * - endpoint：填自己在控制台建的推理接入点 ep-xxxxxxxx
-   * 只影响这栏的提示与快捷项，真正发给接口的都是同一个 model 字段。
+   *
+   * 关键：模型 ID 永远保存在 config.model，接入点按模型 ID 分开存在
+   * config.endpointByModel 里 —— 两个输入框各绑各的，切换模式不动任何值，
+   * 换模型时自动取那个模型自己的 ep，没填过就是空（2026-11-05 用户要求「按模型分别记 ep」）。
    */
-  const [volcMode, setVolcMode] = useState<'model' | 'endpoint'>(() =>
-    config.model.trim().startsWith('ep-') ? 'endpoint' : 'model',
-  )
+  const modelMode: ModelInputMode =
+    config.provider === 'volcengine' ? (config.modelMode ?? 'model') : 'model'
+  /** 当前模型已记住的接入点（没填过就是空） */
+  const currentEndpoint = getEndpointForCurrentModel(config)
+  /** 真正发给接口的模型字段：接入点模式用当前模型的 ep，否则用模型 ID */
+  const effectiveModel = getEffectiveModel(config)
   /**
    * 截图多选：按板块记选中的图片 id。
    * 用来「挑几张一起重认」（单张 hover 的「重认」只能一张一张点，用户 2026-11-05 反馈要能多张）。
@@ -1228,6 +1252,14 @@ export default function DataEntry() {
         toast.error('请先在上方填写视觉模型 API Key')
         return
       }
+      if (!effectiveModel.trim()) {
+        toast.error(
+          modelMode === 'endpoint'
+            ? '这个模型还没填接入点，请把方舟控制台里的 ep-xxxxxxxx 粘到模型栏'
+            : '请先填写模型 ID，或切到「用接入点 ep-」填接入点',
+        )
+        return
+      }
       // 用 ref 判重（state 是异步的，连点两下会穿透）
       if (runIdRef.current) {
         toast.error('正在识别中，先等这次跑完或点「暂停识别」')
@@ -1243,7 +1275,7 @@ export default function DataEntry() {
           images: targetImages.map(i => ({ base64: i.url })),
           config: {
             provider: config.provider,
-            model: config.model,
+            model: effectiveModel,
             apiKey,
             customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
           },
@@ -1317,7 +1349,7 @@ export default function DataEntry() {
       imagesOf,
       apiKey,
       config.provider,
-      config.model,
+      effectiveModel,
       customBaseURL,
       toast,
       activeRowId,
@@ -1327,6 +1359,7 @@ export default function DataEntry() {
       sectionLabel,
       setImagesOf,
       sectionNotes,
+      modelMode,
     ],
   )
 
@@ -1474,7 +1507,7 @@ export default function DataEntry() {
     const rows = sortLedgerDesc(ledger).map(r => ({
       ...r.values,
       __section: r.sectionName,
-      __platform: platformLabels[r.platform] ?? r.platform,
+      __platform: PLATFORM_GROUP_LABELS[r.sectionKey] ?? platformLabels[r.platform] ?? r.platform,
     }))
     return { rows, columns: [...head, ...ledgerColumns] }
   }, [ledger, ledgerColumns])
@@ -1648,7 +1681,7 @@ export default function DataEntry() {
           image: { base64: platformImages[0].url }, // 用第一张图作为标准截图
           config: {
             provider: config.provider,
-            model: config.model,
+            model: effectiveModel,
             apiKey,
             customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
           },
@@ -1664,7 +1697,7 @@ export default function DataEntry() {
         setCalibrating(false)
       }
     },
-    [imagesOf, apiKey, config.provider, config.model, customBaseURL, toast, rows, activeRowId],
+    [imagesOf, apiKey, config.provider, effectiveModel, customBaseURL, toast, rows, activeRowId],
   )
 
   /** 删除模板 */
@@ -2518,13 +2551,11 @@ export default function DataEntry() {
                     <button
                       type="button"
                       onClick={() => {
-                        setVolcMode('model')
-                        // 回填上次填过的模型 ID（不清空 —— 清空会把用户刚粘的 ep 弄丢）
                         switchModelMode('model')
                         toast.success('已切到「模型 ID」：填 doubao-xxx，需在方舟先开通该模型')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
-                        volcMode === 'model'
+                        modelMode === 'model'
                           ? 'border-primary bg-primary/10 text-primary'
                           : 'border-border text-muted-foreground hover:border-primary/50'
                       }`}
@@ -2534,13 +2565,11 @@ export default function DataEntry() {
                     <button
                       type="button"
                       onClick={() => {
-                        setVolcMode('endpoint')
-                        // 回填上次粘过的接入点（模型 ID 那份另外存着，切回去还在）
                         switchModelMode('endpoint')
                         toast.success('已切到「接入点」：把方舟控制台里的 ep-xxxxxxxx 粘进来')
                       }}
                       className={`rounded border px-2 py-0.5 text-[10px] transition ${
-                        volcMode === 'endpoint'
+                        modelMode === 'endpoint'
                           ? 'border-primary bg-primary/10 text-primary'
                           : 'border-border text-muted-foreground hover:border-primary/50'
                       }`}
@@ -2550,17 +2579,17 @@ export default function DataEntry() {
                   </div>
                 )}
                 <Input
-                  value={config.model}
-                  onChange={e => setModelValue(volcMode, e.target.value)}
+                  value={modelMode === 'endpoint' ? currentEndpoint : config.model}
+                  onChange={e => setModelValue(modelMode, e.target.value)}
                   placeholder={
                     config.provider !== 'volcengine'
                       ? '如 glm-4v-plus'
-                      : volcMode === 'endpoint'
+                      : modelMode === 'endpoint'
                         ? 'ep-2026100411306-xxxxx（你在方舟建的接入点）'
                         : 'doubao-seed-2-1-pro-260915（模型 ID）'
                   }
                 />
-                {config.provider === 'volcengine' && volcMode === 'model' && (
+                {config.provider === 'volcengine' && modelMode === 'model' && (
                   <>
                     {/* 一键切常用型号；浏览器原生的 datalist 下拉会挡住下面的按钮，已去掉 */}
                     <div className="flex flex-wrap gap-1">
@@ -2585,17 +2614,23 @@ export default function DataEntry() {
                     </p>
                   </>
                 )}
-                {config.provider === 'volcengine' && volcMode === 'endpoint' && (
+                {config.provider === 'volcengine' && modelMode === 'endpoint' && (
                   <>
-                    {config.model.trim().startsWith('ep-') && (
+                    <p className="text-[10px] text-muted-foreground">
+                      现在填的是「{config.model || '（先在模型 ID 模式选一个模型）'}」的接入点
+                      {currentEndpoint
+                        ? ' · 已记住，换模型互不影响'
+                        : ' · 这个模型还没填过，所以是空的'}
+                    </p>
+                    {currentEndpoint.trim().startsWith('ep-') && (
                       <p className="text-[10px] text-emerald-600 dark:text-emerald-400">
-                        ✓ 已记住这个接入点，下次打开还在；切到「模型 ID」也不会丢
+                        ✓ 已记住，下次打开还在；切到「模型 ID」也不会丢
                       </p>
                     )}
                     <p className="text-[10px] leading-relaxed text-muted-foreground">
                       去方舟控制台 →「在线推理」→ 创建接入点 → 选中 doubao 视觉模型 → 把生成的{' '}
                       <code className="px-0.5">ep-xxxxxxxx</code>
-                      填到这里。这个方式不用额外开通模型，但每换一个模型都要建一个新接入点。
+                      填到这里。每个模型的接入点分开记，换模型会自动换成它自己的那份。
                     </p>
                   </>
                 )}
