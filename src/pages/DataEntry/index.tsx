@@ -863,6 +863,8 @@ function ColumnManagerModal({
                 <SelectContent>
                   <SelectItem value="manual">人工填写</SelectItem>
                   <SelectItem value="vision">视觉识别</SelectItem>
+                  <SelectItem value="ai">AI 判断</SelectItem>
+                  <SelectItem value="fixed">规则固定</SelectItem>
                   <SelectItem value="skip">留空</SelectItem>
                   <SelectItem value="computed">自动计算</SelectItem>
                 </SelectContent>
@@ -1681,6 +1683,8 @@ export default function DataEntry() {
     ]
     const rows = sortLedgerDesc(ledger).map(r => ({
       ...r.values,
+      // 隐藏字段：只给主进程判断「这条数据属于哪个板块用」，不会变成表头
+      __sectionKey: r.sectionKey,
       __section: r.sectionName,
       __platform: PLATFORM_GROUP_LABELS[r.sectionKey] ?? platformLabels[r.platform] ?? r.platform,
     }))

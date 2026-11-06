@@ -105,7 +105,11 @@ function buildSystemPrompt(): string {
  * - 关键：值必须是「从截图读到的真实数据」，绝不能把字段名/含义当值回显
  */
 function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): string {
-  const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
+  const targetCols = columns.filter(
+    c => c.source !== 'skip' && c.source !== 'computed' && c.source !== 'fixed',
+  )
+  // AI 判断类字段：不给「照抄」的模板，要求模型结合截图自己下结论
+  const aiCols = targetCols.filter(c => c.source === 'ai')
   // 用「键名（含义）→ 例：数值」格式，避免模型把含义当成值
   const items = targetCols
     .map(c => `- "${c.key}"（含义：${c.label}）→ 例：从截图读到的真实数值`)
@@ -124,6 +128,13 @@ function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): str
     '   - 键名含 Hour（如 durationHour）：返回小时数（2:30:00→2.5）。\n' +
     '   - 键名含 Rate/Ratio：返回百分数数字（35%→35）。\n' +
     '   - 其余数值按原样返回。\n' +
+    (aiCols.length > 0
+      ? `\n【需要你判断的字段（共 ${aiCols.length} 项）】\n${aiCols
+          .map(c => `- "${c.key}"（${c.label}）`)
+          .join(
+            '\n',
+          )}\n这些字段截图里可能没有现成数字，要你根据截图里的时间/内容自己判断后给出结论；判断不出来就返回 ""。\n`
+      : '') +
     '5. 【绝对禁止】不要用 ``` 包裹、不要加任何说明文字，直接输出 { 开头的 JSON。'
   )
 }
@@ -135,7 +146,9 @@ function buildCalibrationPrompt(
   columns: LiveReportColumn[],
   knownValues: Record<string, string>,
 ): string {
-  const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
+  const targetCols = columns.filter(
+    c => c.source !== 'skip' && c.source !== 'computed' && c.source !== 'fixed',
+  )
   // 只列出有已知值的字段
   const items = targetCols
     .filter(c => knownValues[c.key] !== undefined && knownValues[c.key] !== '')
@@ -556,7 +569,9 @@ export class VisionRecognizer {
     const imageBatches: { idx: number; url: string }[][] = chunk(urlPairs, MAX_IMAGES_PER_BATCH)
 
     // ---- 字段分块（每块少量字段，让模型更专注、准确率更高）----
-    const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
+    const targetCols = columns.filter(
+      c => c.source !== 'skip' && c.source !== 'computed' && c.source !== 'fixed',
+    )
     const fieldChunks: LiveReportColumn[][] = chunk(targetCols, FIELDS_PER_CHUNK)
 
     const totalCalls = imageBatches.length * fieldChunks.length
@@ -890,7 +905,7 @@ export class VisionRecognizer {
     const matchedByLabel: string[] = [] // 通过标签名匹配的
 
     for (const col of columns) {
-      if (col.source === 'skip' || col.source === 'computed') continue
+      if (col.source === 'skip' || col.source === 'computed' || col.source === 'fixed') continue
 
       // 策略1: 用 col.key 精确匹配
       let coord = extractCoord(parsed[col.key])

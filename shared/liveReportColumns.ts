@@ -18,7 +18,16 @@ export interface LiveReportColumn {
   /** 单位换算提示，决定导出前如何把识别到的原文转成数值 */
   unit: ColumnUnit
   /** 来源：manual=需人工填写；vision=从截图识别；skip=留空不填；computed=由其它列计算得出 */
-  source: 'manual' | 'vision' | 'skip' | 'computed'
+  /**
+   * 字段怎么来：
+   *  manual   人工填写
+   *  vision   视觉识别（从截图直接抄）
+   *  ai       AI 判断（不照抄，让模型根据截图内容自己下结论，如场次、区间）
+   *  fixed    规则固定（值定死，识别和手改都不动它，如平台名、主播名）
+   *  skip     留空
+   *  computed 自动计算
+   */
+  source: 'manual' | 'vision' | 'ai' | 'fixed' | 'skip' | 'computed'
   /** UI 分组 */
   group: string
   /**

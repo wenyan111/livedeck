@@ -81,10 +81,19 @@ export class XlsxExportService {
     columns: LiveReportColumn[],
     outputPath: string,
   ): Promise<string> {
-    // ① 丢掉全空列：用户只用了一个板块时，别的板块那几十列就别占地方了
+    /**
+     * ① 决定输出哪些列：
+     *    - 固定列（板块/平台/日期/场次/周标签）永远保留
+     *    - 有数据的列保留
+     *    - **本次导出里出现过的板块**，它的字段也全保留（哪怕是刚加、还没有数据的字段）
+     *      —— 用户 2026-11-06：「这个连同字段也要同步啊」，光同步数据不同步表头不行。
+     *    没出现过的板块（一列数据都没有）仍然整组丢掉，免得一个板块用时多出几十列空白。
+     */
+    const activeSections = new Set(rows.map(row => String(row.__sectionKey ?? '')).filter(Boolean))
     const usedColumns = columns.filter(c => {
       if (ALWAYS_KEEP_KEYS.has(c.key)) return true
-      return rows.some(row => String(row[c.key] ?? '').trim() !== '')
+      if (rows.some(row => String(row[c.key] ?? '').trim() !== '')) return true
+      return activeSections.has(String(c.platform ?? ''))
     })
 
     const workbook = new ExcelJS.Workbook()
