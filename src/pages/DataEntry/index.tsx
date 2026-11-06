@@ -1387,6 +1387,22 @@ export default function DataEntry() {
   /** 每个板块各自的文件选择框 */
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [columns, setColumns] = useState<LiveReportColumn[]>(LIVE_REPORT_COLUMNS)
+
+  /** 一键清空某个板块这一行的全部字段值（截图不动） */
+  const clearSectionValues = useCallback(
+    (platform: string) => {
+      setRows(prev =>
+        prev.map(r =>
+          (r.platform as string) === platform
+            ? { ...r, values: buildDefaultValues(columns.filter(c => c.platform === platform)) }
+            : r,
+        ),
+      )
+      toast.success(`已清空「${sectionLabel(platform)}」这一行`)
+    },
+    [columns, sectionLabel, toast],
+  )
+
   /**
    * 每个板块至少要有一行：识别结果要写进「当前选中行」，没有行就没地方写。
    * 以前靠「新增一行」按钮手点（用户嫌多余，2026-11-06 删掉了），那就自动补：
@@ -2686,6 +2702,20 @@ export default function DataEntry() {
                     }}
                   >
                     生成空白模板
+                  </Button>
+                  <span className="flex-1" />
+                  {/* 一键清空本板块这一行的所有数据（用户 2026-11-06 要的） */}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => {
+                      if (!window.confirm(`清空「${sectionLabel(pf)}」这一行的全部数据？`)) return
+                      clearSectionValues(pf)
+                    }}
+                    title="把这一行的字段值全部清空（截图不受影响）"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" /> 一键清空
                   </Button>
                 </div>
               </CardContent>

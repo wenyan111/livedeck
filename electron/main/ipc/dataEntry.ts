@@ -5,7 +5,6 @@ import ExcelJS from 'exceljs'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { dataEntryImagesService } from '#/services/DataEntryImagesService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
-import { scheduleLedgerSync, syncLedgerNow } from '#/services/LedgerAutoSync'
 import { ledgerSyncService } from '#/services/LedgerSyncService'
 import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
 import { liveReportLedgerService } from '#/services/LiveReportLedgerService'
@@ -110,8 +109,6 @@ function setupIpcHandlers() {
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveColumns, async (_, columns) => {
     await liveReportColumnsService.saveColumns(columns)
-    // 字段改了，外部表格的表头要跟着改
-    scheduleLedgerSync()
   })
 
   // ── 视觉模板校准 ──
@@ -159,15 +156,11 @@ function setupIpcHandlers() {
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.upsertLedger, async (_, records) => {
-    const merged = await liveReportLedgerService.upsert(records)
-    scheduleLedgerSync()
-    return merged
+    return await liveReportLedgerService.upsert(records)
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveLedger, async (_, records) => {
-    const saved = await liveReportLedgerService.saveAll(records)
-    scheduleLedgerSync()
-    return saved
+    return await liveReportLedgerService.saveAll(records)
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.exportLedger, async (_, params) => {
@@ -181,10 +174,7 @@ function setupIpcHandlers() {
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.setLedgerSync, async (_, config) => {
-    const saved = await ledgerSyncService.save(config)
-    // 一开启就立刻写一次，别等下一次数据变化
-    if (saved.enabled) void syncLedgerNow()
-    return saved
+    return await ledgerSyncService.save(config)
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.chooseLedgerSyncPath, async () => {
@@ -209,8 +199,4 @@ function setupIpcHandlers() {
 
 export function setupDataEntryIpcHandlers() {
   setupIpcHandlers()
-  // 开软件 2 秒后补写一次：上次退出前可能有没落盘的改动，或者版本升级后格式变了
-  setTimeout(() => {
-    void syncLedgerNow()
-  }, 2000)
 }
