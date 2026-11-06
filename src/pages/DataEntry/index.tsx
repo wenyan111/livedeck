@@ -1934,19 +1934,6 @@ export default function DataEntry() {
     [columns],
   )
 
-  /** 新增一行（归属指定平台，只带该平台自己的列） */
-  const addRow = useCallback(
-    (platform: LiveControlPlatform = 'douyin') => {
-      const newRow = createRow(
-        columns.filter(c => c.platform === platform),
-        platform,
-      )
-      setRows(prev => [...prev, newRow])
-      setActiveRowId(newRow.id)
-    },
-    [columns],
-  )
-
   /** 删除一行 */
   const deleteRow = useCallback(
     (rowId: string) => {
@@ -2405,15 +2392,12 @@ export default function DataEntry() {
                     >
                       <Settings2 className="w-4 h-4 mr-1" /> 管理列
                     </Button>
-                    <Button size="sm" onClick={() => addRow(pk)}>
-                      <Plus className="w-4 h-4 mr-1" /> 新增一行
-                    </Button>
                   </div>
                 </div>
 
                 {pfRows.length === 0 ? (
                   <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                    点上面「新增一行」开始
+                    拖入截图识别后会自动生成这一行
                   </p>
                 ) : (
                   <div className="space-y-2.5">
