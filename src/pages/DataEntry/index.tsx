@@ -523,17 +523,6 @@ function RowCard({
         ) : (
           <ChevronDown className="w-4 h-4 text-muted-foreground" />
         )}
-        <button
-          type="button"
-          onClick={e => {
-            e.stopPropagation()
-            onDelete(row.id)
-          }}
-          className="text-destructive hover:text-destructive/80 p-1 rounded hover:bg-destructive/10"
-          title="删除此行"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
       </div>
 
       {/* 展开的字段网格 */}
@@ -631,6 +620,33 @@ function ColumnManagerModal({
   /** 拖动排序：记住正在拖的行和被悬停的行，用于位移与高亮（用户 2026-11-06 要求标签可拖动换顺序） */
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [overIndex, setOverIndex] = useState<number | null>(null)
+  /** 勾选的字段 key（批量删除用，用户 2026-11-06 要求） */
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const toggleSelected = (key: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  /** 勾选的字段一次性删掉 */
+  const removeSelected = () => {
+    const count = selected.size
+    if (count === 0) return
+    setDraft(prev => prev.filter(c => !selected.has(c.key)))
+    setSelected(new Set())
+    toast.success(`已删掉 ${count} 个字段，记得点「保存」`)
+  }
+  /** 一键清空本板块所有字段（要点确认，误点代价太大） */
+  const removeAll = () => {
+    if (draft.length === 0) return
+    if (!window.confirm(`确定清空本板块全部 ${draft.length} 个字段？保存后生效`)) return
+    setDraft([])
+    setSelected(new Set())
+    toast.success('已清空，记得点「保存」')
+  }
+
   /** 把 from 行挪到 to 位置，其余依次顺移 */
   const moveColumn = useCallback((from: number, to: number) => {
     setDraft(prev => {
@@ -768,12 +784,43 @@ function ColumnManagerModal({
               <Upload className="w-3 h-3 mr-0.5" /> 从文件导入
             </Button>
             <span className="text-xs text-muted-foreground">{draft.length} 列</span>
+            {/* 字段太多时一个个点垃圾桶太慢：勾选后一次删掉，或一键清空（用户 2026-11-06） */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-1.5 text-[11px] text-destructive hover:text-destructive"
+              onClick={removeSelected}
+              disabled={selected.size === 0}
+              title="把勾选的字段一次删掉"
+            >
+              <Trash2 className="w-3 h-3 mr-0.5" /> 删除选中
+              {selected.size > 0 ? ` (${selected.size})` : ''}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5 text-[11px] text-destructive hover:text-destructive"
+              onClick={removeAll}
+              disabled={draft.length === 0}
+              title="清空本板块所有字段"
+            >
+              全部删除
+            </Button>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头：第一格是拖动手柄的位置 */}
-          <div className="grid grid-cols-[20px_1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[18px_20px_1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 cursor-pointer accent-primary"
+              checked={draft.length > 0 && selected.size === draft.length}
+              onChange={e => {
+                setSelected(e.target.checked ? new Set(draft.map(c => c.key)) : new Set())
+              }}
+              title={selected.size === draft.length ? '取消全选' : '全选'}
+            />
             <span title="拖动手柄可调整列顺序" className="flex justify-center">
               ⇅
             </span>
@@ -803,7 +850,7 @@ function ColumnManagerModal({
                 setDragIndex(null)
                 setOverIndex(null)
               }}
-              className={`grid grid-cols-[20px_1fr_82px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
+              className={`grid grid-cols-[18px_20px_1fr_82px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
                 dragIndex === idx ? 'opacity-40' : ''
               } ${
                 overIndex === idx && dragIndex !== null && dragIndex !== idx
@@ -811,6 +858,13 @@ function ColumnManagerModal({
                   : ''
               }`}
             >
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                checked={selected.has(col.key)}
+                onChange={() => toggleSelected(col.key)}
+                title="勾选后可批量删除"
+              />
               {/* 拖动手柄：按下即拖，松手落位；行本身不 draggable，避免和输入框选字打架 */}
               <button
                 type="button"
@@ -1176,6 +1230,34 @@ export default function DataEntry() {
   /** 每个板块各自的文件选择框 */
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [columns, setColumns] = useState<LiveReportColumn[]>(LIVE_REPORT_COLUMNS)
+  /**
+   * 每个板块至少要有一行：识别结果要写进「当前选中行」，没有行就没地方写。
+   * 以前靠「新增一行」按钮手点（用户嫌多余，2026-11-06 删掉了），那就自动补：
+   * 板块一出现（新增板块 / 导入字段 / 恢复默认）就给它建一行。
+   */
+  useEffect(() => {
+    if (!loadedRef.current || sectionPlatforms.length === 0) return
+    setRows(prev => {
+      const have = new Set(prev.map(r => r.platform as string))
+      const missing = sectionPlatforms.filter(pf => !have.has(pf))
+      if (missing.length === 0) return prev
+      const adds = missing.map(pf =>
+        createRow(
+          columns.filter(c => (c.platform as string) === pf),
+          pf as LiveControlPlatform,
+        ),
+      )
+      return [...prev, ...adds]
+    })
+  }, [sectionPlatforms, columns])
+
+  /** 当前选中行失效（被删 / 换板块 / 刚补了行）时自动选第一行，否则识别没地方写 */
+  useEffect(() => {
+    if (rows.length === 0) return
+    if (rows.some(r => r.id === activeRowId)) return
+    setActiveRowId(rows[0].id)
+  }, [rows, activeRowId])
+
   const [isDragging, setIsDragging] = useState(false)
   // 视觉模板
   const [template, setTemplate] = useState<{ id: string; name: string; fieldCount: number } | null>(
