@@ -562,11 +562,12 @@ export class VisionRecognizer {
     const totalCalls = imageBatches.length * fieldChunks.length
     const useTemplate = template && template.fields.length > 0
     // 用户在页面上「调教」出来的规则：拼进 system 提示词，每一次调用都带上
+    // 一条规则里允许换行（用户习惯把所有规则塞进同一条），续行缩进两格，避免和序号错位
     const extraRules = (extraInstructions ?? []).map(s => s.trim()).filter(Boolean)
     const systemPrompt =
       extraRules.length > 0
         ? `${buildSystemPrompt()}\n\n【用户指定的纠正规则（优先级最高，与上面规则冲突时以这里为准）】\n${extraRules
-            .map((r, i) => `${i + 1}. ${r}`)
+            .map((r, i) => `${i + 1}. ${r.replace(/\n+/g, '\n   ')}`)
             .join('\n')}`
         : buildSystemPrompt()
     this.logger.info(
