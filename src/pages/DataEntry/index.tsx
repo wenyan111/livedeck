@@ -424,7 +424,6 @@ function RowCard({
   columns,
   onSelect,
   onUpdateValues,
-  onDelete,
   flashKeys = [],
 }: {
   row: DataRow
@@ -434,7 +433,6 @@ function RowCard({
   columns: LiveReportColumn[]
   onSelect: () => void
   onUpdateValues: (rowId: string, key: string, val: string) => void
-  onDelete: (rowId: string) => void
   /** 本次识别刚写入、需要高光的字段 key */
   flashKeys?: string[]
 }) {
@@ -601,20 +599,14 @@ function RowCard({
 /** 列管理弹窗：增 / 删 / 改标签、单位、类型、分组 */
 function ColumnManagerModal({
   columns,
-  allColumns,
   platform,
-  labelOf,
   onCancel,
   onSave,
 }: {
   /** 当前板块自己的列（只显示这些，保存时也只替换这些） */
   columns: LiveReportColumn[]
-  /** 全部列，用于「从其它板块导入字段」 */
-  allColumns: LiveReportColumn[]
   /** 当前正在编辑哪个板块（新增/导入的列归到这个板块） */
   platform: LiveControlPlatform
-  /** 把板块 key 转成显示名（自定义板块没有平台名，靠这个兜底） */
-  labelOf: (key: string) => string
   onCancel: () => void
   onSave: (cols: LiveReportColumn[]) => void
 }) {
@@ -660,31 +652,6 @@ function ColumnManagerModal({
       return next
     })
   }, [])
-
-  /** 可导入来源：其它板块里已有的列 */
-  const importSources = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const c of allColumns) {
-      const key = c.platform as string
-      if (key === (platform as string)) continue
-      map.set(key, (map.get(key) ?? 0) + 1)
-    }
-    return [...map.entries()]
-  }, [allColumns, platform])
-
-  /** 把某个板块的字段整套复制过来（同 key 的跳过，避免重复） */
-  const importFrom = (src: string) => {
-    const existing = new Set(draft.map(c => c.key))
-    const added = allColumns
-      .filter(c => (c.platform as string) === src && !existing.has(c.key))
-      .map(c => ({ ...c, platform }))
-    if (added.length === 0) {
-      toast.error('没有可导入的新字段（已全部存在）')
-      return
-    }
-    setDraft(prev => [...prev, ...added])
-    toast.success(`已导入 ${added.length} 个字段，记得点「保存」`)
-  }
 
   const update = (idx: number, patch: Partial<LiveReportColumn>) =>
     setDraft(prev => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)))
@@ -760,23 +727,6 @@ function ColumnManagerModal({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {importSources.length > 0 && (
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground">导入字段：</span>
-                {importSources.map(([src, count]) => (
-                  <Button
-                    key={src}
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-1.5 text-[11px]"
-                    title={`把「${labelOf(src)}」的 ${count} 个字段复制到本板块`}
-                    onClick={() => importFrom(src)}
-                  >
-                    {labelOf(src)}
-                  </Button>
-                ))}
-              </div>
-            )}
             <Button
               size="sm"
               variant="outline"
@@ -2045,25 +1995,6 @@ export default function DataEntry() {
     [columns],
   )
 
-  /** 删除一行 */
-  const deleteRow = useCallback(
-    (rowId: string) => {
-      setRows(prev => {
-        if (prev.length <= 1) {
-          toast.error('至少保留一行数据')
-          return prev
-        }
-        const next = prev.filter(r => r.id !== rowId)
-        // 若删的是当前活跃行，切到第一行
-        if (activeRowId === rowId) {
-          setActiveRowId(next[0]?.id ?? '')
-        }
-        return next
-      })
-    },
-    [activeRowId, toast],
-  )
-
   /** 保存列管理结果：对齐行数据 + 落盘 */
   const handleSaveColumns = useCallback(
     async (newCols: LiveReportColumn[]) => {
@@ -2522,7 +2453,6 @@ export default function DataEntry() {
                         columns={pfColumns}
                         onSelect={() => setActiveRowId(row.id)}
                         onUpdateValues={updateCellValue}
-                        onDelete={deleteRow}
                         flashKeys={flash?.rowId === row.id ? flash.keys : []}
                       />
                     ))}
@@ -2879,9 +2809,7 @@ export default function DataEntry() {
       {columnModalOpen && (
         <ColumnManagerModal
           columns={columns.filter(c => c.platform === columnModalPlatform)}
-          allColumns={columns}
           platform={columnModalPlatform}
-          labelOf={sectionLabel}
           onCancel={() => setColumnModalOpen(false)}
           onSave={handleSaveColumns}
         />
