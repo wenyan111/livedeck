@@ -1817,8 +1817,19 @@ export default function DataEntry() {
    * 总表变了就自动写文件（防抖 900ms，避免连续敲字时反复写盘）。
    * 关着的时候只是空转，不产生任何 IO。
    */
+  const initialSyncDoneRef = useRef(false)
   useEffect(() => {
-    if (!ledgerSync.enabled || !ledgerSync.filePath) return
+    if (!ledgerSync.enabled || !ledgerSync.filePath) {
+      initialSyncDoneRef.current = false
+      return
+    }
+    // 刚打开软件 / 刚开启同步时先立刻写一次：否则改完字段或升级版本后，
+    // 只要总表数据没变，外部 xlsx 就一直停在旧内容（用户 2026-11-06 反馈）
+    if (!initialSyncDoneRef.current) {
+      initialSyncDoneRef.current = true
+      void writeLedgerSync(ledgerSync.filePath)
+      return
+    }
     const timer = setTimeout(() => {
       void writeLedgerSync(ledgerSync.filePath)
     }, 900)

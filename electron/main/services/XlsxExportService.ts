@@ -52,9 +52,6 @@ function columnLetter(n: number): string {
   return s || 'A'
 }
 
-/** 这几列即便全空也要留着，否则表就看不懂了 */
-const ALWAYS_KEEP_KEYS = new Set(['__section', '__platform', 'date', 'session', 'weekLabel'])
-
 /** 参考「英子数据记录.xlsx」的排版：微软雅黑 11、四边细边框、居中、白底 */
 const CELL_BORDER: ExcelJS.Borders = {
   left: { style: 'thin', color: { argb: 'FF9AA4AD' } },
@@ -82,19 +79,11 @@ export class XlsxExportService {
     outputPath: string,
   ): Promise<string> {
     /**
-     * ① 决定输出哪些列：
-     *    - 固定列（板块/平台/日期/场次/周标签）永远保留
-     *    - 有数据的列保留
-     *    - **本次导出里出现过的板块**，它的字段也全保留（哪怕是刚加、还没有数据的字段）
-     *      —— 用户 2026-11-06：「这个连同字段也要同步啊」，光同步数据不同步表头不行。
-     *    没出现过的板块（一列数据都没有）仍然整组丢掉，免得一个板块用时多出几十列空白。
+     * ① 输出哪些列：**全部字段都输出**，包括还没填、标了「（留空）」的字段。
+     *    曾经按「这一列有没有数据」筛过，结果用户新加/留空的字段在外部表格里连表头都没有
+     *    （2026-11-06 反复反馈两次）。字段是用户自己在「管理列」里定的，就该原样同步出去。
      */
-    const activeSections = new Set(rows.map(row => String(row.__sectionKey ?? '')).filter(Boolean))
-    const usedColumns = columns.filter(c => {
-      if (ALWAYS_KEEP_KEYS.has(c.key)) return true
-      if (rows.some(row => String(row[c.key] ?? '').trim() !== '')) return true
-      return activeSections.has(String(c.platform ?? ''))
-    })
+    const usedColumns = columns.filter(c => String(c.label ?? '').trim() !== '')
 
     const workbook = new ExcelJS.Workbook()
     workbook.creator = 'LiveDeck・直播台'
