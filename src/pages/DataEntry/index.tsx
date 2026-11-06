@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileSpreadsheet,
+  GripVertical,
   MapPin,
   MessageSquarePlus,
   Pause,
@@ -634,6 +635,19 @@ function ColumnManagerModal({
 }) {
   const { toast } = useToast()
   const [draft, setDraft] = useState<LiveReportColumn[]>(() => columns.map(c => ({ ...c })))
+  /** 拖动排序：记住正在拖的行和被悬停的行，用于位移与高亮（用户 2026-11-06 要求标签可拖动换顺序） */
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [overIndex, setOverIndex] = useState<number | null>(null)
+  /** 把 from 行挪到 to 位置，其余依次顺移 */
+  const moveColumn = useCallback((from: number, to: number) => {
+    setDraft(prev => {
+      if (from === to || from < 0 || to < 0 || from >= prev.length || to >= prev.length) return prev
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+  }, [])
 
   /** 可导入来源：其它板块里已有的列 */
   const importSources = useMemo(() => {
@@ -714,8 +728,11 @@ function ColumnManagerModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
-          {/* 表头 */}
-          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {/* 表头：第一格是拖动手柄的位置 */}
+          <div className="grid grid-cols-[20px_1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span title="拖动手柄可调整列顺序" className="flex justify-center">
+              ⇅
+            </span>
             <span>标签名</span>
             <span>单位</span>
             <span>类型</span>
@@ -724,10 +741,54 @@ function ColumnManagerModal({
             <span />
           </div>
           {draft.map((col, idx) => (
+            // biome-ignore lint/a11y/noStaticElementInteractions: 整行只是拖拽落点，真正的可交互控件是里面的手柄按钮
             <div
               key={col.key}
-              className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 items-center"
+              data-col-row
+              onDragOver={e => {
+                // 必须 preventDefault 才允许 drop
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                if (overIndex !== idx) setOverIndex(idx)
+              }}
+              onDragLeave={() => setOverIndex(i => (i === idx ? null : i))}
+              onDrop={e => {
+                e.preventDefault()
+                const from = Number(e.dataTransfer.getData('text/plain'))
+                moveColumn(from, idx)
+                setDragIndex(null)
+                setOverIndex(null)
+              }}
+              className={`grid grid-cols-[20px_1fr_82px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
+                dragIndex === idx ? 'opacity-40' : ''
+              } ${
+                overIndex === idx && dragIndex !== null && dragIndex !== idx
+                  ? 'bg-primary/10 ring-1 ring-primary/40'
+                  : ''
+              }`}
             >
+              {/* 拖动手柄：按下即拖，松手落位；行本身不 draggable，避免和输入框选字打架 */}
+              <button
+                type="button"
+                draggable
+                onDragStart={e => {
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/plain', String(idx))
+                  // 拖动时用整行当跟随影像，不然只有一个小图标飘着
+                  const row = e.currentTarget.closest('[data-col-row]') as HTMLElement | null
+                  if (row) e.dataTransfer.setDragImage(row, 14, row.offsetHeight / 2)
+                  setDragIndex(idx)
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null)
+                  setOverIndex(null)
+                }}
+                className="flex h-8 cursor-grab justify-center rounded text-muted-foreground/70 transition hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                title="按住拖动，换这一列的先后顺序"
+                aria-label={`拖动调整「${col.label}」的顺序`}
+              >
+                <GripVertical className="w-4 h-4 self-center" />
+              </button>
               <Input
                 value={col.label}
                 onChange={e => update(idx, { label: e.target.value })}
