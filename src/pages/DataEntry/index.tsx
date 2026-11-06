@@ -343,6 +343,21 @@ const _PLATFORM_GROUP_LABELS: Record<string, string> = {
 }
 
 /** 总表排序：日期新的在上，同一天早场在前，再按更新时间倒序 */
+/**
+ * 把「按板块存的旧规则」塌缩成一份全局规则（key = __all__）。
+ * 增删改都以它为基准，否则删掉的规则会从旧板块数据里又冒出来。
+ */
+function collapseNotes(prev: Record<string, string[]>): Record<string, string[]> {
+  const merged: string[] = [...(prev.__all__ ?? [])]
+  for (const [key, list] of Object.entries(prev)) {
+    if (key === '__all__') continue
+    for (const rule of list ?? []) {
+      if (rule.trim() && !merged.includes(rule)) merged.push(rule)
+    }
+  }
+  return { __all__: merged }
+}
+
 function sortLedgerDesc(records: LedgerRecord[]): LedgerRecord[] {
   return [...records].sort((a, b) => {
     const da = a.values.date ?? ''
@@ -1327,12 +1342,13 @@ export default function DataEntry() {
       const text = (noteDraft[key] ?? '').trim()
       if (!text) return
       setSectionNotes(prev => {
-        const list = prev.__all__ ?? []
+        const base = collapseNotes(prev)
+        const list = base.__all__ ?? []
         if (list.includes(text)) {
           toast.error('这条已经记住了')
           return prev
         }
-        const next = { ...prev, __all__: [...list, text] }
+        const next = { ...base, __all__: [...list, text] }
         persistNotes(next)
         return next
       })
@@ -1343,8 +1359,9 @@ export default function DataEntry() {
   const removeSectionNote = useCallback(
     (_key: string, index: number) => {
       setSectionNotes(prev => {
-        const list = (prev.__all__ ?? []).filter((_, i) => i !== index)
-        const next = { ...prev, __all__: list }
+        const base = collapseNotes(prev)
+        const list = (base.__all__ ?? []).filter((_, i) => i !== index)
+        const next = { ...base, __all__: list }
         persistNotes(next)
         return next
       })
@@ -1355,10 +1372,11 @@ export default function DataEntry() {
   const updateSectionNote = useCallback(
     (_key: string, index: number, text: string) => {
       setSectionNotes(prev => {
-        const list = [...(prev.__all__ ?? [])]
+        const base = collapseNotes(prev)
+        const list = [...(base.__all__ ?? [])]
         if (index < 0 || index >= list.length) return prev
         list[index] = text
-        const next = { ...prev, __all__: list }
+        const next = { ...base, __all__: list }
         persistNotes(next)
         return next
       })
