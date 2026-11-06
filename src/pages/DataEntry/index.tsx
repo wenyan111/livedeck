@@ -33,8 +33,8 @@ import {
   getDefaultColumns,
   LIVE_REPORT_COLUMNS,
   type LiveReportColumn,
+  parseDurationHours,
   roundByColumn,
-  takeFirstItem,
 } from 'shared/liveReportColumns'
 import { providers } from 'shared/providers'
 import { platformLabels } from '@/abilities'
@@ -65,6 +65,15 @@ const VOLC_VISION_MODELS = [
   { id: 'doubao-seed-2-1-pro-260915', name: 'Seed 2.1 pro', note: '最强，价格基准' },
   { id: 'doubao-seed-2-1-turbo-260628', name: 'Seed 2.1 turbo', note: '同代、约半价、更快' },
   { id: 'doubao-seed-2-0-lite-260428', name: 'Seed 2.0 lite', note: '最便宜、小字易错' },
+]
+
+/** 常用规则：一键写进「填写规则」，省得每次手打（2026-11-06 用户要求随时改和加） */
+const COMMON_RULE_TEMPLATES = [
+  '观看核心城市、成交核心城市只填排第一的那一个，不要带具体占比、不要顿号连写',
+  '所有百分比字段都要带上 % 号',
+  '直播时长写成「2小时05分」这种，不要写小数',
+  '时间写成「10:40-13:08」这种具体时间段',
+  '十点之后开始的是午场或下午场，请自行判断场次',
 ]
 
 interface LocalImage {
@@ -147,6 +156,14 @@ function reconcileRows(rows: DataRow[], newColumns: LiveReportColumn[]): DataRow
  * 自动补成 `06:40-09:30` 的形式（用户 2026-11-05 要求）。
  * 只在 time 还是「单个时间」时才拼，已经是时间段就原样保留。
  */
+/** 两位补零 */
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** 是不是「2小时05分」这种中文时长格式（用户用纠正记忆规定的写法） */
+function isChineseDuration(raw: string): boolean {
+  return /^\d+\s*小?时\s*\d{1,2}\s*分$/.test(String(raw ?? '').trim())
+}
+
 function composeTimeRange(values: Record<string, string>): void {
   const raw = String(values.time ?? '').trim()
 
@@ -158,8 +175,15 @@ function composeTimeRange(values: Record<string, string>): void {
     if (end < start) end += 24 * 60 // 跨零点（如 23:30-01:10）
     const hours = (end - start) / 60
     if (hours > 0) {
-      const digits = digitsForDuration(values)
-      values.durationHour = String(+hours.toFixed(digits))
+      if (isChineseDuration(values.durationHour ?? '')) {
+        // 模型按「纠正记忆」填的是「2小时28分」这种格式 —— 反算时也用同一种格式写回去，
+        // 别再用小数覆盖掉用户规定的写法（2026-11-06 用户反馈「我的规定为什么没有执行」）。
+        const totalMin = Math.round(end - start)
+        values.durationHour = `${Math.floor(totalMin / 60)}小时${pad2(totalMin % 60)}分`
+      } else {
+        const digits = digitsForDuration(values)
+        values.durationHour = String(+hours.toFixed(digits))
+      }
     }
     return
   }
@@ -167,8 +191,8 @@ function composeTimeRange(values: Record<string, string>): void {
   // 方向二：时间是单个「06:40」→ 用开始时间 + 直播时长拼成时间段
   const single = raw.match(/^(\d{1,2}):(\d{2})$/)
   if (!single) return
-  const duration = Number.parseFloat(String(values.durationHour ?? '').replace(/[^\d.]/g, ''))
-  if (!Number.isFinite(duration) || duration <= 0) return
+  const duration = parseDurationHours(values.durationHour ?? '')
+  if (duration === null || duration <= 0) return
   const startMin = Number(single[1]) * 60 + Number(single[2])
   const endMin = Math.round(startMin + duration * 60)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -188,7 +212,10 @@ function dedupeColumns(columns: LiveReportColumn[]): LiveReportColumn[] {
     const k = `${c.platform}::${c.key}`
     if (seen.has(k)) continue
     seen.add(k)
-    out.push(c)
+    // 旧配置里可能还留着已下线的「firstOnly」字段，顺手清掉，不让它继续跟着存盘
+    const cleaned = { ...c } as LiveReportColumn & { firstOnly?: boolean }
+    delete cleaned.firstOnly
+    out.push(cleaned)
   }
   return out
 }
@@ -341,6 +368,7 @@ function RowCard({
   onSelect,
   onUpdateValues,
   onDelete,
+  flashKeys = [],
 }: {
   row: DataRow
   rowIndex: number
@@ -350,6 +378,8 @@ function RowCard({
   onSelect: () => void
   onUpdateValues: (rowId: string, key: string, val: string) => void
   onDelete: (rowId: string) => void
+  /** 本次识别刚写入、需要高光的字段 key */
+  flashKeys?: string[]
 }) {
   const [expanded, setExpanded] = useState(rowIndex === 0)
 
@@ -468,17 +498,19 @@ function RowCard({
                   const isComputed = col.source === 'computed'
                   const isLow = row.lowConfidence.includes(col.key)
                   const filled = val.trim() !== ''
-                  const ring = isSkip
-                    ? 'bg-muted/60 opacity-60'
-                    : isComputed
-                      ? 'bg-accent/50'
-                      : isLow
-                        ? 'ring-2 ring-warning'
-                        : isManual
-                          ? 'bg-muted/50'
-                          : filled
-                            ? 'bg-success/10'
-                            : 'bg-destructive/10'
+                  const ring = flashKeys.includes(col.key)
+                    ? 'ring-2 ring-success bg-success/25 shadow-[0_0_10px_rgba(34,197,94,0.55)] transition-all duration-500'
+                    : isSkip
+                      ? 'bg-muted/60 opacity-60'
+                      : isComputed
+                        ? 'bg-accent/50'
+                        : isLow
+                          ? 'ring-2 ring-warning'
+                          : isManual
+                            ? 'bg-muted/50'
+                            : filled
+                              ? 'bg-success/10'
+                              : 'bg-destructive/10'
                   const placeholder =
                     col.key === 'time'
                       ? '如 06:40-09:30'
@@ -623,19 +655,18 @@ function ColumnManagerModal({
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头 */}
-          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_92px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <span>标签名</span>
             <span>单位</span>
             <span>类型</span>
             <span>分组</span>
             <span title="四舍五入到几位小数">小数位</span>
-            <span title="一个格子里有多个值时怎么办（如「广东、浙江、江苏」）">多值</span>
             <span />
           </div>
           {draft.map((col, idx) => (
             <div
               key={col.key}
-              className="grid grid-cols-[1fr_82px_100px_96px_76px_92px_32px] gap-2 items-center"
+              className="grid grid-cols-[1fr_82px_100px_96px_76px_32px] gap-2 items-center"
             >
               <Input
                 value={col.label}
@@ -695,27 +726,6 @@ function ColumnManagerModal({
                   <SelectItem value="2">2 位</SelectItem>
                   <SelectItem value="3">3 位</SelectItem>
                   <SelectItem value="4">4 位</SelectItem>
-                </SelectContent>
-              </Select>
-              {/* 多值字段怎么取值：全留 / 只留第一项（文本列才有意义） */}
-              <Select
-                value={col.firstOnly ? 'first' : 'all'}
-                onValueChange={v => update(idx, { firstOnly: v === 'first' })}
-                disabled={col.unit !== 'text'}
-              >
-                <SelectTrigger
-                  className="h-8 text-xs"
-                  title={
-                    col.unit === 'text'
-                      ? '一个格子里出现多个值（如「广东、浙江、江苏」）时怎么处理'
-                      : '只有「文本」类型的字段需要设置'
-                  }
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部保留</SelectItem>
-                  <SelectItem value="first">只取第一项</SelectItem>
                 </SelectContent>
               </Select>
               <button
@@ -829,6 +839,15 @@ export default function DataEntry() {
   const [recognizingKey, setRecognizingKey] = useState<string | null>(null)
   /** 已点了「暂停识别」，等当前这次模型调用跑完就停 */
   const [pausing, setPausing] = useState(false)
+  /** 本次识别刚写入的字段：亮 5 秒绿框，方便一眼看出改了哪些格子 */
+  const [flash, setFlash] = useState<{ rowId: string; keys: string[] } | null>(null)
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+    },
+    [],
+  )
   /** 当前这次识别的 runId，暂停时要靠它告诉主进程停哪个任务 */
   const runIdRef = useRef<string | null>(null)
   /**
@@ -933,6 +952,17 @@ export default function DataEntry() {
         if (index < 0 || index >= list.length) return prev
         list[index] = text
         const next = { ...prev, [key]: list }
+        persistNotes(next)
+        return next
+      })
+    },
+    [persistNotes],
+  )
+  /** 点「+ 添加一条」直接在列表里开一条空规则，当场就能写 */
+  const addBlankNote = useCallback(
+    (key: string) => {
+      setSectionNotes(prev => {
+        const next = { ...prev, [key]: [...(prev[key] ?? []), ''] }
         persistNotes(next)
         return next
       })
@@ -1282,8 +1312,28 @@ export default function DataEntry() {
           columns: platformColumns,
           templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
           runId, // 暂停时按这个 id 找到本次任务
-          extraInstructions: sectionNotes[platform] ?? [], // 用户「纠正记忆」写下的规则
+          // 空规则（刚点「添加一条」还没写）不发给模型
+          extraInstructions: (sectionNotes[platform] ?? []).map(n => n.trim()).filter(Boolean),
         })
+        // 这次识别真正写进来的字段（非空、且与旧值不同）→ 高光 5 秒。
+        // 之前只有「低置信度」黄框，识别干净时一个提示都没有，用户看不出改了哪些格子。
+        if (targetRow) {
+          const oldValues = targetRow.values
+          const writtenKeys = Object.entries(result.values as Record<string, string>)
+            .filter(([k, v]) => {
+              const text = String(v ?? '').trim()
+              return text !== '' && text !== String(oldValues[k] ?? '').trim()
+            })
+            .map(([k]) => k)
+          if (result.values?.weekLabel && !writtenKeys.includes('weekLabel')) {
+            writtenKeys.push('weekLabel')
+          }
+          if (writtenKeys.length > 0) {
+            setFlash({ rowId: targetRow.id, keys: writtenKeys })
+            if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+            flashTimerRef.current = setTimeout(() => setFlash(null), 5000)
+          }
+        }
         // 合并到当前活跃行
         setRows(prev =>
           prev.map(r => {
@@ -1293,12 +1343,6 @@ export default function DataEntry() {
             for (const c of platformColumns) {
               if (c.decimals !== undefined && merged[c.key] !== undefined) {
                 merged[c.key] = roundByColumn(merged[c.key], c)
-              }
-            }
-            // 「只取第一项」的文本列（如观看核心城市）：广东、浙江、江苏 → 广东
-            for (const c of platformColumns) {
-              if (c.firstOnly && merged[c.key]) {
-                merged[c.key] = takeFirstItem(merged[c.key])
               }
             }
             // 时间列补成「开始-结束」时间段
@@ -1964,12 +2008,13 @@ export default function DataEntry() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {/* 调教区：把「你希望它怎么填」说成一句规则，长期生效 */}
+                {/* 调教区：所有「怎么填」的规则都直接写在这里，随时可改可加可删。
+                    用多行文本框而不是单行 input —— 长中文规则在单行里会被横向截断（用户 2026-11-06 反馈「好多规则看不到」）。 */}
                 <div className="rounded-lg border bg-muted/30 px-2.5 py-2">
                   <div className="flex items-center gap-2">
                     <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
                     <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
-                      纠正记忆
+                      填写规则
                     </span>
                     <Input
                       value={noteDraft[pf] ?? ''}
@@ -1980,9 +2025,9 @@ export default function DataEntry() {
                           addSectionNote(pf)
                         }
                       }}
-                      placeholder="跟识别说一句，比如：观看核心城市只填第一名；不要带顿号"
+                      placeholder="写一条规则，比如：观看核心城市只填第一名；不要带顿号"
                       className="h-7 flex-1 px-2 text-[11px]"
-                      title="回车即可记住；记住的规则会在每次识别时一起交给模型"
+                      title="回车即可加上；每条规则都会在每次识别时一起交给模型"
                     />
                     <Button
                       size="sm"
@@ -1992,11 +2037,53 @@ export default function DataEntry() {
                       disabled={!(noteDraft[pf] ?? '').trim()}
                     >
                       <Send className="w-3 h-3 mr-1" />
-                      记住
+                      添加规则
                     </Button>
                   </div>
+
+                  {/* 常用规则一点就加，不用手打 */}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    <span className="text-[10px] text-muted-foreground">常用：</span>
+                    {COMMON_RULE_TEMPLATES.map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => {
+                          const list = sectionNotes[pf] ?? []
+                          if (list.includes(t)) {
+                            toast.error('这条已经加过了')
+                            return
+                          }
+                          const next = { ...sectionNotes, [pf]: [...list, t] }
+                          setSectionNotes(next)
+                          persistNotes(next)
+                          toast.success('已加入规则，可以直接改文字')
+                        }}
+                        className="rounded border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground transition hover:border-primary/60 hover:text-primary"
+                        title={t}
+                      >
+                        + {t.length > 12 ? `${t.slice(0, 12)}…` : t}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-1.5 flex items-center justify-between">
+                    <span className="text-[10px] text-muted-foreground">
+                      已写 {(sectionNotes[pf] ?? []).filter(n => n.trim()).length} 条 ·
+                      每条都会随识别一起交给模型
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-1.5 text-[10px]"
+                      onClick={() => addBlankNote(pf)}
+                    >
+                      <Plus className="w-3 h-3 mr-0.5" /> 添加一条
+                    </Button>
+                  </div>
+
                   {(sectionNotes[pf] ?? []).length > 0 && (
-                    <div className="mt-1.5 space-y-1">
+                    <div className="mt-1 max-h-72 space-y-1 overflow-y-auto pr-1">
                       {(sectionNotes[pf] ?? []).map((note, i) => (
                         <div
                           // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
@@ -2004,28 +2091,28 @@ export default function DataEntry() {
                           className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-1 text-[11px]"
                         >
                           <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 font-medium text-primary">
-                            你
+                            {i + 1}
                           </span>
-                          {/* 规则本身也能直接改：点进去改完就生效（存本地） */}
-                          <input
+                          <textarea
                             value={note}
                             onChange={e => updateSectionNote(pf, i, e.target.value)}
-                            className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-relaxed text-foreground/85 outline-none hover:border-border focus:border-primary focus:bg-background"
-                            title="点这里可以直接修改这条规则"
+                            rows={2}
+                            placeholder="在这里写规则，改完立即生效"
+                            className="min-w-0 flex-1 resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-relaxed text-foreground/85 outline-none hover:border-border focus:border-primary focus:bg-background"
+                            title="可以直接修改这条规则，改完自动保存"
                           />
                           <button
                             type="button"
                             onClick={() => removeSectionNote(pf, i)}
-                            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                            title="忘掉这条规则"
+                            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                            title="删掉这条规则"
                           >
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ))}
                       <p className="pl-1 text-[10px] text-muted-foreground">
-                        已记住 {(sectionNotes[pf] ?? []).length}{' '}
-                        条，每次识别都会带上；点文字可直接改，× 删掉
+                        规则整条显示，可直接改文字、× 删掉；空规则不会发给模型
                       </p>
                     </div>
                   )}
@@ -2265,6 +2352,7 @@ export default function DataEntry() {
                         onSelect={() => setActiveRowId(row.id)}
                         onUpdateValues={updateCellValue}
                         onDelete={deleteRow}
+                        flashKeys={flash?.rowId === row.id ? flash.keys : []}
                       />
                     ))}
                   </div>

@@ -27,27 +27,6 @@ export interface LiveReportColumn {
    * （用户 2026-11-05 要求「可以自定义字段四舍五入」）
    */
   decimals?: number
-  /**
-   * 多值字段只保留第一项。
-   * 例：「观看核心城市」在截图里是「广东、浙江、江苏、…」，表格里只要第一名 → 开这个就只填「广东」。
-   * （用户 2026-11-05 要求「如何只填写一个城市」）
-   */
-  firstOnly?: boolean
-}
-
-/**
- * 取多值文本里的第一项。
- * 支持中文顿号、中英文逗号、分号、斜杠、竖线等常见分隔符；
- * 末尾的悬空分隔符（「广东、浙江、江苏、」）不会产生空项。
- */
-export function takeFirstItem(raw: string): string {
-  const text = (raw ?? '').trim()
-  if (!text) return ''
-  const parts = text
-    .split(/[、，,；;/|｜]+/)
-    .map(s => s.trim())
-    .filter(Boolean)
-  return parts[0] ?? text
 }
 
 /**
@@ -214,9 +193,34 @@ export const MANUAL_COLUMN_KEYS = LIVE_REPORT_COLUMNS.filter(c => c.source === '
 export function roundByColumn(value: string, column: LiveReportColumn): string {
   const digits = column.decimals
   if (digits === undefined || digits === null) return value
+  // 中文时长（「2小时05分」）、带文字的值不做数值四舍五入，
+  // 否则「2小时28分」会被 parseFloat 读成 228，把纠正记忆写出来的格式冲掉
+  if (/[\u4e00-\u9fa5]/.test(String(value))) return value
   const num = Number.parseFloat(String(value).replace(/[^\d.-]/g, ''))
   if (Number.isNaN(num)) return value
-  return String(+num.toFixed(digits))
+  // 百分号不能在四舍五入时丢掉（用户纠正规则：百分比必须带 %）
+  const suffix = String(value).trim().endsWith('%') ? '%' : ''
+  return String(+num.toFixed(digits)) + suffix
+}
+
+/**
+ * 把「2小时05分」「2时5分」「2:28:00」「2.47」统一解析成小时数。
+ *
+ * 用户 2026-11-06 用「纠正记忆」规定直播时长要填「2小时05分」这种格式；
+ * 之前 `toNumber()` 直接剥掉非数字会把「2小时28分」读成 228，
+ * 派生列（平均评论次数/分）会跟着算错，这里统一按真实时长解析。
+ */
+export function parseDurationHours(raw: string): number | null {
+  const text = String(raw ?? '').trim()
+  if (!text) return null
+  const hms = text.match(/(\d{1,2}):(\d{2}):(\d{2})/)
+  if (hms) return Number(hms[1]) + Number(hms[2]) / 60 + Number(hms[3]) / 3600
+  const hm = text.match(/(\d+)\s*小?时\s*(\d+)\s*分?/)
+  if (hm) return Number(hm[1]) + Number(hm[2]) / 60
+  const onlyHour = text.match(/^(\d+)\s*小时?$/)
+  if (onlyHour) return Number(onlyHour[1])
+  const n = Number.parseFloat(text.replace(/[^\d.]/g, ''))
+  return Number.isNaN(n) ? null : n
 }
 
 /** 把视觉识别到的原文按列单位转换成可写入的数值/文本 */
@@ -224,7 +228,7 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
   const text = (raw ?? '').trim()
   if (text === '') return ''
 
-  if (column.unit === 'text') return column.firstOnly ? takeFirstItem(text) : text
+  if (column.unit === 'text') return text
   if (column.unit === 'wan') {
     const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
     if (Number.isNaN(num)) return text
@@ -233,23 +237,12 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
     return num >= 10000 ? String(+(num / 10000).toFixed(4)) : String(num)
   }
   if (column.unit === 'hour') {
-    // 支持 "H:MM:SS" / "X时X分X秒" / 纯数字
-    const hms = text.match(/(\d+):(\d+):(\d+)/)
-    if (hms) {
-      const [, h, m, s] = hms
-      return String(+(Number(h) + Number(m) / 60 + Number(s) / 3600).toFixed(4))
-    }
-    const hm = text.match(/(\d+)\s*时\s*(\d+)\s*分/)
-    if (hm) {
-      const [, h, m] = hm
-      return String(+(Number(h) + Number(m) / 60).toFixed(4))
-    }
-    const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
-    return Number.isNaN(num) ? text : String(num)
+    const hours = parseDurationHours(text)
+    return hours === null ? text : String(+hours.toFixed(4))
   }
   if (column.unit === 'percent') {
     const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
-    return Number.isNaN(num) ? text : String(num)
+    return Number.isNaN(num) ? text : String(num) + (text.includes('%') ? '%' : '')
   }
   // none：保留原文（通常为数字），但按列配置四舍五入
   return roundByColumn(text, column)
@@ -300,7 +293,7 @@ export function computeDerivedValues(
   const invest = actualCount(raw, 'investAmount', columns)
   const viewers = actualCount(raw, 'viewersWan', columns)
   const comments = actualCount(raw, 'comments', columns)
-  const durationH = toNumber(raw['durationHour'] ?? '')
+  const durationH = parseDurationHours(raw['durationHour'] ?? '')
   const fansGroup = actualCount(raw, 'fansGroupNew', columns)
 
   // 派生列按「该列配置的小数位」四舍五入（没配就默认 2 位）

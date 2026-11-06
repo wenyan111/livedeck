@@ -108,10 +108,7 @@ function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): str
   const targetCols = columns.filter(c => c.source !== 'skip' && c.source !== 'computed')
   // 用「键名（含义）→ 例：数值」格式，避免模型把含义当成值
   const items = targetCols
-    .map(
-      c =>
-        `- "${c.key}"（含义：${c.label}${c.firstOnly ? '；只填排第一的那一个，不要用顿号连写多个' : ''}）→ 例：从截图读到的真实数值`,
-    )
+    .map(c => `- "${c.key}"（含义：${c.label}）→ 例：从截图读到的真实数值`)
     .join('\n')
   return (
     '请从这些直播数据截图中，逐个读取下面每个指标的真实数值。\n\n' +
