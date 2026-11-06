@@ -86,6 +86,15 @@ const createDefaultConfig = (): ProviderConfig => {
 const ensureShape = (config: ProviderConfig): ProviderConfig => {
   if (!config.modelPreferences) config.modelPreferences = {}
   if (!config.savedModels) config.savedModels = defaultSavedModels()
+  // 当前在用的模型必须能在清单里看到，否则列表和实际用的对不上（自定义服务商没有预置项，全靠这条）
+  if (config.model) {
+    const list = config.savedModels[config.provider]
+    if (!list) {
+      config.savedModels[config.provider] = [config.model]
+    } else if (!list.includes(config.model)) {
+      list.unshift(config.model)
+    }
+  }
   return config
 }
 
