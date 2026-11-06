@@ -1,4 +1,3 @@
-import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import type { DashboardSnapshot, DouyinDashboardConfig } from './dashboard'
@@ -198,7 +197,6 @@ export interface IpcChannels {
     images: { path?: string; base64?: string }[]
     config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
     columns?: LiveReportColumn[]
-    templateId?: string // 传 'use-saved' 使用已保存的模板
     /** 本次识别的任务 id，暂停时用它定位 */
     runId?: string
     /** 页面「纠正记忆」里的规则，逐条追加到提示词 */
@@ -226,14 +224,6 @@ export interface IpcChannels {
   }) => string
   [IPC_CHANNELS.dataEntry.getColumns]: () => LiveReportColumn[]
   [IPC_CHANNELS.dataEntry.saveColumns]: (columns: LiveReportColumn[]) => void
-  // 视觉模板校准
-  [IPC_CHANNELS.dataEntry.calibrateTemplate]: (params: {
-    image: { path?: string; base64?: string }
-    config: { provider: string; model: string; apiKey: string; customBaseURL?: string }
-    knownValues: Record<string, string>
-  }) => VisionTemplate
-  [IPC_CHANNELS.dataEntry.getTemplate]: () => VisionTemplate | null
-  [IPC_CHANNELS.dataEntry.deleteTemplate]: () => void
   // 表单数据持久化
   [IPC_CHANNELS.dataEntry.getRows]: () => DataEntrySavedState | null
   [IPC_CHANNELS.dataEntry.saveRows]: (state: DataEntrySavedState) => void

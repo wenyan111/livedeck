@@ -107,10 +107,6 @@ export const IPC_CHANNELS = {
     importColumnHeaders: 'dataEntry:importColumnHeaders',
     getColumns: 'dataEntry:getColumns',
     saveColumns: 'dataEntry:saveColumns',
-    // 视觉模板校准
-    calibrateTemplate: 'dataEntry:calibrateTemplate',
-    getTemplate: 'dataEntry:getTemplate',
-    deleteTemplate: 'dataEntry:deleteTemplate',
     // 表单数据持久化（防止 app 重启后已填数据丢失）
     getRows: 'dataEntry:getRows',
     saveRows: 'dataEntry:saveRows',

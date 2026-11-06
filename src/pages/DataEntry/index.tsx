@@ -1,4 +1,3 @@
-import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import {
   ChevronDown,
   ChevronUp,
@@ -7,7 +6,6 @@ import {
   EyeOff,
   FileSpreadsheet,
   GripVertical,
-  MapPin,
   MessageSquarePlus,
   Pause,
   Plus,
@@ -1569,11 +1567,6 @@ export default function DataEntry() {
   }, [rows, activeRowId])
 
   const [isDragging, setIsDragging] = useState(false)
-  // 视觉模板
-  const [template, setTemplate] = useState<{ id: string; name: string; fieldCount: number } | null>(
-    null,
-  )
-  const [calibrating, setCalibrating] = useState(false)
   const dragCounter = useRef(0)
   // 初始加载完成前，禁止自动保存覆盖已存档数据
   const loadedRef = useRef(false)
@@ -1842,7 +1835,6 @@ export default function DataEntry() {
             customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
           },
           columns: platformColumns,
-          templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
           runId, // 暂停时按这个 id 找到本次任务
           // 空规则（刚点「添加一条」还没写）不发给模型
           extraInstructions: globalNotes.map(n => n.trim()).filter(Boolean),
@@ -1932,7 +1924,6 @@ export default function DataEntry() {
       activeRowId,
       rows,
       columns,
-      template,
       sectionLabel,
       setImagesOf,
       globalNotes,
@@ -1950,16 +1941,6 @@ export default function DataEntry() {
       // 暂停失败不影响识别继续跑完
       setPausing(false)
     }
-  }, [])
-
-  /** 加载已保存的模板 */
-  useEffect(() => {
-    window.ipcRenderer
-      .invoke(IPC_CHANNELS.dataEntry.getTemplate)
-      .then((tmpl: VisionTemplate | null) => {
-        if (tmpl) setTemplate({ id: tmpl.id, name: tmpl.name, fieldCount: tmpl.fields.length })
-      })
-      .catch(() => {})
   }, [])
 
   /** 进页面先把总表读出来 */
@@ -2240,71 +2221,6 @@ export default function DataEntry() {
   // 自动同步已经挪到主进程（LedgerAutoSyncService）：字段一改、总表一变就写，
   // 而且开软件 2 秒后补写一次，不依赖本页面是否打开。
   // 这里只保留手动的「同步到总表」按钮（点击时立刻写一次并提示结果）。
-
-  /** 校准模板：用该平台的第一张截图 + 该平台当前行数据作为已知值 */
-  const handleCalibrate = useCallback(
-    async (platform: LiveControlPlatform) => {
-      const platformImages = imagesOf(platform)
-      if (platformImages.length === 0) {
-        toast.error('请先上传一张标准截图')
-        return
-      }
-      if (!apiKey) {
-        toast.error('请先填写视觉模型 API Key')
-        return
-      }
-      // 用当前活跃行的非空数据作为已知值（至少需要几个有值的字段）
-      const activeRow =
-        rows.find(r => r.id === activeRowId && r.platform === platform) ??
-        rows.find(r => r.platform === platform)
-      const knownValues: Record<string, string> = {}
-      if (activeRow) {
-        for (const [k, v] of Object.entries(activeRow.values)) {
-          if (v && v.trim() !== '') knownValues[k] = v.trim()
-        }
-      }
-      if (Object.keys(knownValues).length < 5) {
-        toast.error(
-          `校准需要至少 5 个已填写的字段作为参考，当前只有 ${Object.keys(knownValues).length} 个。请先手动填几个关键字段（如时间、观看人数、GMV 等）`,
-        )
-        return
-      }
-
-      setCalibrating(true)
-      try {
-        const result = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.calibrateTemplate, {
-          image: { base64: platformImages[0].url }, // 用第一张图作为标准截图
-          config: {
-            provider: config.provider,
-            model: effectiveModel,
-            apiKey,
-            customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
-          },
-          knownValues,
-        })
-        setTemplate({ id: result.id, name: result.name, fieldCount: result.fields.length })
-        toast.success(
-          `模板校准完成！定位了 ${result.fields.length} 个字段位置。以后识别会自动使用此模板，准确度大幅提升。`,
-        )
-      } catch (error) {
-        toast.error(`校准失败：${error instanceof Error ? error.message : String(error)}`)
-      } finally {
-        setCalibrating(false)
-      }
-    },
-    [imagesOf, apiKey, config.provider, effectiveModel, customBaseURL, toast, rows, activeRowId],
-  )
-
-  /** 删除模板 */
-  const _handleDeleteTemplate = useCallback(async () => {
-    try {
-      await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.deleteTemplate)
-      setTemplate(null)
-      toast.success('已删除视觉模板')
-    } catch {
-      toast.error('删除失败')
-    }
-  }, [toast])
 
   /** 更新某行的某个字段值 */
   const updateCellValue = useCallback(
@@ -2647,19 +2563,6 @@ export default function DataEntry() {
                         </Button>
                       </>
                     )}
-                    <Button
-                      size="sm"
-                      variant={template ? 'secondary' : 'outline'}
-                      onClick={() => handleCalibrate(pk)}
-                      disabled={calibrating || pfImages.length === 0}
-                    >
-                      <MapPin className="w-3.5 h-3.5 mr-1" />
-                      {calibrating
-                        ? '校准中...'
-                        : template
-                          ? `已校准(${template.fieldCount}字段)`
-                          : '校准模板'}
-                    </Button>
                     <input
                       ref={el => {
                         fileInputs.current[pk] = el
