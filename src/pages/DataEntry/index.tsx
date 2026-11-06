@@ -1275,17 +1275,18 @@ export default function DataEntry() {
   }, [])
   /** 各板块输入框里的草稿 */
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({})
+  // 规则是全局一份（key = __all__），不看当前板块
   const addSectionNote = useCallback(
     (key: string) => {
       const text = (noteDraft[key] ?? '').trim()
       if (!text) return
       setSectionNotes(prev => {
-        const list = prev[key] ?? []
+        const list = prev.__all__ ?? []
         if (list.includes(text)) {
           toast.error('这条已经记住了')
           return prev
         }
-        const next = { ...prev, [key]: [...list, text] }
+        const next = { ...prev, __all__: [...list, text] }
         persistNotes(next)
         return next
       })
@@ -1294,10 +1295,10 @@ export default function DataEntry() {
     [noteDraft, persistNotes, toast],
   )
   const removeSectionNote = useCallback(
-    (key: string, index: number) => {
+    (_key: string, index: number) => {
       setSectionNotes(prev => {
-        const list = (prev[key] ?? []).filter((_, i) => i !== index)
-        const next = { ...prev, [key]: list }
+        const list = (prev.__all__ ?? []).filter((_, i) => i !== index)
+        const next = { ...prev, __all__: list }
         persistNotes(next)
         return next
       })
@@ -1306,12 +1307,12 @@ export default function DataEntry() {
   )
   /** 直接改某一条规则（用户 2026-11-05：这里要能改，不用删了重写） */
   const updateSectionNote = useCallback(
-    (key: string, index: number, text: string) => {
+    (_key: string, index: number, text: string) => {
       setSectionNotes(prev => {
-        const list = [...(prev[key] ?? [])]
+        const list = [...(prev.__all__ ?? [])]
         if (index < 0 || index >= list.length) return prev
         list[index] = text
-        const next = { ...prev, [key]: list }
+        const next = { ...prev, __all__: list }
         persistNotes(next)
         return next
       })
@@ -1387,6 +1388,29 @@ export default function DataEntry() {
   /** 每个板块各自的文件选择框 */
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [columns, setColumns] = useState<LiveReportColumn[]>(LIVE_REPORT_COLUMNS)
+
+  /**
+   * 规则原来是按「板块 key」分开存的，问题一堆：
+   * 板块重建/改名后 key 变了就变孤儿；换到别的板块看又是空的；识别时只带当前板块那份。
+   * 这些规则本质是「怎么填」的通用要求（百分比带 %、¥ 不带、时间段格式…），
+   * 所以统一合并成一份全局规则（key = __all__），任何板块都显示、都生效（2026-11-06 用户反馈后改）。
+   */
+  const globalNotes = sectionNotes.__all__ ?? []
+  useEffect(() => {
+    setSectionNotes(prev => {
+      const keys = Object.keys(prev).filter(k => k !== '__all__')
+      if (keys.length === 0) return prev
+      const merged: string[] = [...(prev.__all__ ?? [])]
+      for (const key of keys) {
+        for (const rule of prev[key] ?? []) {
+          if (rule.trim() && !merged.includes(rule)) merged.push(rule)
+        }
+      }
+      const next: Record<string, string[]> = { __all__: merged }
+      persistNotes(next)
+      return next
+    })
+  }, [persistNotes])
 
   /** 一键清空某个板块这一行的全部字段值（截图不动） */
   const clearSectionValues = useCallback(
@@ -1708,7 +1732,7 @@ export default function DataEntry() {
           templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
           runId, // 暂停时按这个 id 找到本次任务
           // 空规则（刚点「添加一条」还没写）不发给模型
-          extraInstructions: (sectionNotes[platform] ?? []).map(n => n.trim()).filter(Boolean),
+          extraInstructions: (sectionNotes.__all__ ?? []).map(n => n.trim()).filter(Boolean),
         })
         // 这次识别真正写进来的字段（非空、且与旧值不同）→ 高光 5 秒。
         // 之前只有「低置信度」黄框，识别干净时一个提示都没有，用户看不出改了哪些格子。
@@ -2355,6 +2379,9 @@ export default function DataEntry() {
                     <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
                     <span className="shrink-0 text-[12px] font-medium text-muted-foreground">
                       填写规则
+                      <span className="ml-1 text-[10px] font-normal text-muted-foreground/70">
+                        所有板块通用
+                      </span>
                     </span>
                     <RuleComposer
                       value={noteDraft[pf] ?? ''}
@@ -2376,9 +2403,9 @@ export default function DataEntry() {
                   {/* 规则列表：一条一行、随内容长高。常用模板、「已写 N 条」提示、
                       底部重复的「添加一条」都已按用户要求删掉；空规则不会发给模型。
                       高度封顶约 4 行（104px），规则再多就在这里上下滑动，不把页面顶长 */}
-                  {(sectionNotes[pf] ?? []).length > 0 && (
+                  {globalNotes.length > 0 && (
                     <div className="rule-scroll mt-1 max-h-[104px] space-y-0.5 overflow-y-auto overscroll-contain pr-1">
-                      {(sectionNotes[pf] ?? []).map((note, i) => (
+                      {globalNotes.map((note, i) => (
                         <div
                           // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
                           key={`${pf}-note-${i}`}
