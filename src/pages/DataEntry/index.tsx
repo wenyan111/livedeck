@@ -31,6 +31,7 @@ import {
   COMPUTED_DEPENDENCY_KEYS,
   computeDerivedValues,
   computedRuleOf,
+  convertColumnValue,
   generateColumnKey,
   getDefaultColumns,
   LIVE_REPORT_COLUMNS,
@@ -1582,11 +1583,12 @@ export default function DataEntry() {
           prev.map(r => {
             if (r.id !== targetRow?.id) return r
             const merged = { ...r.values, ...result.values }
-            // 按各列配置的「小数位」四舍五入（识别出来的原始值常常是长小数）
+            // 先按列单位归一化（万 / 百分比 / 小时），再按「小数位」四舍五入
+            // —— 识别出来是「9700」（个）而表格要「0.97」（万）时，这一步自动换算
             for (const c of platformColumns) {
-              if (c.decimals !== undefined && merged[c.key] !== undefined) {
-                merged[c.key] = roundByColumn(merged[c.key], c)
-              }
+              if (merged[c.key] === undefined) continue
+              merged[c.key] = convertColumnValue(c, merged[c.key])
+              if (c.decimals !== undefined) merged[c.key] = roundByColumn(merged[c.key], c)
             }
             // 时间列补成「开始-结束」时间段
             composeTimeRange(merged)

@@ -242,23 +242,37 @@ export function parseDurationHours(raw: string): number | null {
 export function convertColumnValue(column: LiveReportColumn, raw: string): string {
   const text = (raw ?? '').trim()
   if (text === '') return ''
-
   if (column.unit === 'text') return text
+
+  // ── 万 ─────────────────────────────────────────────────────────
+  // 表格里单位是「万」，但识别结果可能是「9700」（个）、「0.97万」或「1.2亿」，
+  // 三种都统一换算成「万」，不用按字段单独配置（2026-11-06 用户问怎么最方便）。
   if (column.unit === 'wan') {
-    const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
+    const yi = text.match(/(-?[\d.]+)\s*亿/)
+    if (yi) return String(+(Number(yi[1]) * 10000).toFixed(4))
+    const wan = text.match(/(-?[\d.]+)\s*万/)
+    if (wan) return String(+Number(wan[1]).toFixed(4))
+    const num = Number.parseFloat(text.replace(/[^\d.-]/g, ''))
     if (Number.isNaN(num)) return text
-    // 原文带"万"直接用该数；否则若数值很大（>=10000）视为原始人数，转成万
-    if (text.includes('万')) return String(num)
-    return num >= 10000 ? String(+(num / 10000).toFixed(4)) : String(num)
+    // 没写单位：>=100 视为「个」（0.01万以上），除以一万；再大的也照此处理
+    return Math.abs(num) >= 100 ? String(+(num / 10000).toFixed(4)) : String(num)
   }
+
+  // ── 小时 ───────────────────────────────────────────────────────
   if (column.unit === 'hour') {
     const hours = parseDurationHours(text)
     return hours === null ? text : String(+hours.toFixed(4))
   }
+
+  // ── 百分比 ─────────────────────────────────────────────────────
+  // 带 % 的直接取数；没带 % 但 <=1 的视为小数比例（0.1115 → 11.15）
   if (column.unit === 'percent') {
-    const num = Number.parseFloat(text.replace(/[^\d.]/g, ''))
-    return Number.isNaN(num) ? text : String(num) + (text.includes('%') ? '%' : '')
+    const num = Number.parseFloat(text.replace(/[^\d.-]/g, ''))
+    if (Number.isNaN(num)) return text
+    if (text.includes('%')) return String(num)
+    return String(Math.abs(num) <= 1 && num !== 0 ? +(num * 100).toFixed(4) : num)
   }
+
   // none：保留原文（通常为数字），但按列配置四舍五入
   return roundByColumn(text, column)
 }
