@@ -42,6 +42,9 @@ const ALL_KEYS = [...PER_ACCOUNT_KEYS, ...GLOBAL_KEYS] as const
 const FORMAT = 'livedeck-config'
 const FORMAT_VERSION = 1
 
+/** 「填写规则」的 localStorage key（与 DataEntry 页面一致） */
+const NOTES_KEY = 'data-entry-section-notes'
+
 type Persisted = { state?: Record<string, unknown>; version?: number } & Record<string, unknown>
 
 export type ExportedAccount = {
@@ -62,6 +65,8 @@ export type ConfigPayload = {
   dataEntry: {
     columns?: unknown
     rows?: unknown
+    /** 「填写规则」：{ 板块 key: string[] }，裸 JSON，不走 persist 结构 */
+    notes?: unknown
   }
 }
 
@@ -232,6 +237,15 @@ export async function collectConfig(): Promise<ConfigPayload> {
     // 取不到就算了，不影响其它配置
   }
 
+  // 「填写规则」是裸 JSON（不是 zustand persist 结构，没有 state 包一层），单独取
+  let notes: unknown
+  try {
+    const raw = localStorage.getItem(NOTES_KEY)
+    notes = raw ? JSON.parse(raw) : undefined
+  } catch {
+    notes = undefined
+  }
+
   return {
     format: FORMAT,
     version: FORMAT_VERSION,
@@ -239,7 +253,7 @@ export async function collectConfig(): Promise<ConfigPayload> {
     skippedShellAccounts: all.length - accounts.length,
     accounts,
     stores,
-    dataEntry: { columns, rows },
+    dataEntry: { columns, rows, notes },
   }
 }
 
@@ -375,6 +389,43 @@ export async function applyConfig(payload: unknown): Promise<ImportResult> {
       }
     } catch {
       // 日报这块失败不影响其它配置
+    }
+
+    // 「填写规则」：按板块合并，同一条只留一份，绝不覆盖本机已经写好的规则
+    if (isPlainObject(data.dataEntry.notes)) {
+      const readLocal = (): Record<string, string[]> => {
+        try {
+          const raw = localStorage.getItem(NOTES_KEY)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (!isPlainObject(parsed)) return {}
+          const out: Record<string, string[]> = {}
+          for (const [key, value] of Object.entries(parsed)) {
+            if (Array.isArray(value)) {
+              out[key] = value.filter((v): v is string => typeof v === 'string')
+            }
+          }
+          return out
+        } catch {
+          return {}
+        }
+      }
+      const merged = readLocal()
+      for (const [key, value] of Object.entries(data.dataEntry.notes)) {
+        if (!Array.isArray(value)) continue
+        let list = merged[key]
+        if (!list) {
+          list = []
+          merged[key] = list
+        }
+        for (const item of value) {
+          if (typeof item === 'string' && item.trim() && !list.includes(item)) list.push(item)
+        }
+      }
+      try {
+        localStorage.setItem(NOTES_KEY, JSON.stringify(merged))
+      } catch {
+        // 存不进去不影响其它配置
+      }
     }
   }
 

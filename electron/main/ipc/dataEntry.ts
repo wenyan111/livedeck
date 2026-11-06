@@ -1,5 +1,7 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app, dialog } from 'electron'
+import ExcelJS from 'exceljs'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { dataEntryImagesService } from '#/services/DataEntryImagesService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
@@ -49,6 +51,51 @@ function setupIpcHandlers() {
       return await tableFileService.exportRows(params.rows, params.outputPath, params.columns)
     }
     return await tableFileService.exportRow(params.values ?? {}, params.outputPath, params.columns)
+  })
+
+  /**
+   * 从外部 Excel / CSV 读第一行表头，直接变成字段标签。
+   * 用户 2026-11-06：一个个手加太麻烦，能不能导入文件识别标签列。
+   */
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.importColumnHeaders, async () => {
+    const res = await dialog.showOpenDialog({
+      title: '选择要导入字段的表格',
+      properties: ['openFile'],
+      filters: [
+        { name: '表格', extensions: ['xlsx', 'xlsm', 'csv', 'tsv', 'txt'] },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+    })
+    const filePath = res.canceled ? undefined : res.filePaths[0]
+    if (!filePath) return null
+
+    const ext = path.extname(filePath).toLowerCase()
+    if (ext === '.csv' || ext === '.tsv' || ext === '.txt') {
+      const raw = await fs.readFile(filePath, 'utf8')
+      const firstLine = raw.split(/\r?\n/).find(line => line.trim()) ?? ''
+      const sep =
+        ext === '.tsv' || ext === '.txt'
+          ? '\t'
+          : firstLine.includes('\t') && !firstLine.includes(',')
+            ? '\t'
+            : ','
+      return firstLine
+        .split(sep)
+        .map(cell => cell.trim().replace(/^"|"$/g, '').trim())
+        .filter(Boolean)
+    }
+
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.readFile(filePath)
+    const sheet = workbook.worksheets[0]
+    if (!sheet) return []
+    const firstRow = sheet.getRow(1)
+    const headers: string[] = []
+    firstRow.eachCell({ includeEmpty: false }, cell => {
+      const text = String(cell.text ?? cell.value ?? '').trim()
+      if (text) headers.push(text)
+    })
+    return headers
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.generateTemplate, async (_, params) => {

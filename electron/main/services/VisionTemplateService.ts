@@ -17,7 +17,7 @@ export class VisionTemplateService {
     try {
       const raw = await fs.readFile(this.filePath, 'utf-8')
       const parsed = JSON.parse(raw)
-      if (parsed && parsed.id && Array.isArray(parsed.fields)) return parsed as VisionTemplate
+      if (parsed?.id && Array.isArray(parsed.fields)) return parsed as VisionTemplate
     } catch {
       // 文件不存在或损坏 → 返回 null
     }
@@ -31,7 +31,11 @@ export class VisionTemplateService {
 
   /** 删除模板 */
   async deleteTemplate(): Promise<void> {
-    try { await fs.unlink(this.filePath) } catch { /* ignore */ }
+    try {
+      await fs.unlink(this.filePath)
+    } catch {
+      /* ignore */
+    }
   }
 
   /** 检查是否有已保存的模板 */

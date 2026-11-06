@@ -10,27 +10,22 @@ type APIKeys = {
   [key in AIProvider]: string
 }
 
-/** 模型这一栏的两种填法：直连模型 ID / 方舟推理接入点 */
-export type ModelInputMode = 'model' | 'endpoint'
-
 export interface ProviderConfig {
   provider: AIProvider
   /**
-   * 永远只存「模型 ID」（doubao-xxx / ep 之外的东西）。
-   * 早期版本拿这一个字段在「模型 ID / 接入点」两种模式间来回覆盖，
-   * 结果换模型时把上个模型的 ep 带了出来（2026-11-05 用户反复反馈「没分开」）。
+   * 当前在用的那个值（模型 ID 或 ep-xxx 都行，原样发给接口）。
+   * 2026-11-06 起不再区分「模型 ID / 接入点」两种模式 —— 用户要的是
+   * 「一个输入框 + 一份可自建、点一下就切的备用列表」，模式开关反而绕。
    */
   model: string
   modelPreferences: {
     [key in AIProvider]: string
   }
   /**
-   * 按模型分别记接入点：key = 模型 ID，value = 该模型自己的 ep-xxx。
-   * 换模型自动取对应那份，从没填过就是空，绝不把别的模型的 ep 串过来。
+   * 按服务商分开存的模型清单（key = 服务商，value = 一串模型 ID 或 ep）。
+   * 每个板块都能在这里攒几条，前面一个「切换」按钮点一下就用它（2026-11-06 用户要求）。
    */
-  endpointByModel: Record<string, string>
-  /** 当前在用哪种填法（持久化，下次打开还是这个模式） */
-  modelMode: ModelInputMode
+  savedModels: Record<AIProvider, string[]>
 }
 
 export type AIConfigType = 'chat' | 'autoReply' | 'dashboard' | 'vision'
@@ -49,11 +44,26 @@ interface AIProviderStore {
   setCustomBaseURL: (type: AIConfigType, url: string) => void
   setConfig: (type: AIConfigType, config: Partial<ProviderConfig>) => void
   setApiKey: (type: AIConfigType, provider: AIProvider, key: string) => void
-  /** 写模型栏：model 模式改模型 ID；endpoint 模式只改「当前模型」对应的接入点 */
-  setModelValue: (type: AIConfigType, mode: ModelInputMode, value: string) => void
-  /** 只切换填法，不动任何值（两个模式从此真正分开） */
-  switchModelMode: (type: AIConfigType, mode: ModelInputMode) => void
+  /** 写当前模型栏（模型 ID 或 ep 都行） */
+  setModelValue: (type: AIConfigType, value: string) => void
+  /** 在列表末尾加一条空模型，等着填 */
+  addSavedModel: (type: AIConfigType) => void
+  /** 改第 index 条的内容 */
+  updateSavedModel: (type: AIConfigType, index: number, value: string) => void
+  /** 删掉第 index 条 */
+  removeSavedModel: (type: AIConfigType, index: number) => void
 }
+
+/** 方舟常用视觉模型：第一次打开就有三条，可自行删除或添加别的 */
+export const VOLC_PRESET_MODELS = [
+  'doubao-seed-2-1-pro-260915',
+  'doubao-seed-2-1-turbo-260628',
+  'doubao-seed-2-0-lite-260428',
+]
+
+const defaultSavedModels = (): Record<AIProvider, string[]> => ({
+  volcengine: [...VOLC_PRESET_MODELS],
+})
 
 const createDefaultConfig = (): ProviderConfig => {
   const modelPreferences = Object.keys(providers).reduce(
@@ -68,30 +78,25 @@ const createDefaultConfig = (): ProviderConfig => {
     provider: 'deepseek',
     model: providers.deepseek.models[0],
     modelPreferences,
-    endpointByModel: {},
-    modelMode: 'model',
+    savedModels: defaultSavedModels(),
   }
 }
 
 /** 老数据缺字段时补齐，避免 set 时 undefined 崩 */
 const ensureShape = (config: ProviderConfig): ProviderConfig => {
   if (!config.modelPreferences) config.modelPreferences = {}
-  if (!config.endpointByModel) config.endpointByModel = {}
-  if (!config.modelMode) config.modelMode = 'model'
+  if (!config.savedModels) config.savedModels = defaultSavedModels()
   return config
 }
 
-/** 实际发给模型的字段：接入点模式下用「当前模型」对应的 ep，否则用模型 ID */
+/** 实际发给模型的字段：当前模型栏里写什么就用什么 */
 export function getEffectiveModel(config: ProviderConfig): string {
-  if (config.provider === 'volcengine' && config.modelMode === 'endpoint') {
-    return config.endpointByModel?.[config.model] ?? ''
-  }
   return config.model
 }
 
-/** 当前模型已记住的接入点（没填过就是空） */
-export function getEndpointForCurrentModel(config: ProviderConfig): string {
-  return config.endpointByModel?.[config.model] ?? ''
+/** 当前服务商名下的模型清单 */
+export function getSavedModels(config: ProviderConfig): string[] {
+  return config.savedModels?.[config.provider] ?? []
 }
 
 const createDefaultApiKeys = (): APIKeys => {
@@ -133,7 +138,7 @@ export const useAIProviderStore = create<AIProviderStore>()(
               state[type].config.modelPreferences[config.provider] = newModel
             } else if (config.model !== undefined) {
               // 注意：以前写成 `else if (config.model)`，空字符串会被当成"没传"忽略，
-              // 于是「切到接入点模式时清空模型」这类操作根本没生效。
+              // 于是「清空模型栏」这类操作根本没生效。
               state[type].config.model = config.model
               // 记住偏好，但不把空值覆盖进去（否则切回来是空的）
               if (config.model)
@@ -141,27 +146,36 @@ export const useAIProviderStore = create<AIProviderStore>()(
             }
           })
         },
-        setModelValue: (type, mode, value) => {
+        setModelValue: (type, value) => {
           set(state => {
-            const currentConfig = ensureShape(state[type].config)
-            if (mode === 'endpoint') {
-              // 只写「当前模型」这一格，模型 ID 本身不动
-              const modelId = currentConfig.model
-              if (value) {
-                state[type].config.endpointByModel[modelId] = value
-              } else {
-                delete state[type].config.endpointByModel[modelId]
-              }
-              return
-            }
-            state[type].config.model = value
-            if (value) state[type].config.modelPreferences[currentConfig.provider] = value
+            const cfg = ensureShape(state[type].config)
+            cfg.model = value
+            if (value) cfg.modelPreferences[cfg.provider] = value
           })
         },
-        switchModelMode: (type, mode) => {
+        addSavedModel: type => {
           set(state => {
-            ensureShape(state[type].config)
-            state[type].config.modelMode = mode
+            const cfg = ensureShape(state[type].config)
+            let list = cfg.savedModels[cfg.provider]
+            if (!list) {
+              list = []
+              cfg.savedModels[cfg.provider] = list
+            }
+            list.push('')
+          })
+        },
+        updateSavedModel: (type, index, value) => {
+          set(state => {
+            const cfg = ensureShape(state[type].config)
+            const list = cfg.savedModels[cfg.provider]
+            if (list && list[index] !== undefined) list[index] = value
+          })
+        },
+        removeSavedModel: (type, index) => {
+          set(state => {
+            const cfg = ensureShape(state[type].config)
+            const list = cfg.savedModels[cfg.provider]
+            if (list) list.splice(index, 1)
           })
         },
         setApiKey: (type, provider, key) => {
@@ -179,7 +193,7 @@ export const useAIProviderStore = create<AIProviderStore>()(
         dashboard: state.dashboard,
         vision: state.vision,
       }),
-      version: 3,
+      version: 5,
       migrate: (persistedState: unknown, version: number) => {
         // 从原先 useAIChat 旧版本迁移
         if (version === 0) {
@@ -190,19 +204,53 @@ export const useAIProviderStore = create<AIProviderStore>()(
           }
           return migratedState
         }
-        // v1/v2 → v3：模型 ID 与接入点彻底拆成两个字段。
-        // 旧版把 ep- 值直接塞在 model 里，没法知道它属于哪个模型 —— 干脆丢弃，
-        // 免得又把「上个模型的 ep」串到新模型上（用户明确不要）。
+        // v1~v4 → v5：模型栏就是「一串模型 + 每条一个切换按钮」，不再有模式开关，也没有名字/备注。
+        // 老的 endpointByModel 一条条转成清单里的值（当前模式决定当下在用哪条），
+        // v4 那种 { label, value } 结构在这里统一摊平成字符串，用户辛苦填的 ep 一个都不会丢。
         const state = (persistedState ?? {}) as Record<string, AIConfig>
         for (const key of ['chat', 'autoReply', 'dashboard', 'vision']) {
-          const cfg = state[key]?.config as ProviderConfig & { endpointPreferences?: unknown }
+          const cfg = state[key]?.config as
+            | (ProviderConfig & {
+                endpointByModel?: Record<string, string>
+                endpointPreferences?: unknown
+                modelMode?: string
+              })
+            | undefined
           if (!cfg) continue
-          ensureShape(cfg)
+          const legacyEndpoints = cfg.endpointByModel ?? {}
+          const legacyMode = cfg.modelMode
+          delete cfg.endpointByModel
           delete cfg.endpointPreferences
-          if (typeof cfg.model === 'string' && cfg.model.trim().startsWith('ep-')) {
-            cfg.model = cfg.modelPreferences?.[cfg.provider] || ''
-            cfg.modelMode = 'endpoint'
+          delete cfg.modelMode
+          if (!cfg.savedModels) cfg.savedModels = defaultSavedModels()
+          // v4 存的是 { label, value }，v5 只要字符串，先统一摊平
+          const toText = (item: unknown): string => {
+            if (typeof item === 'string') return item
+            if (item && typeof item === 'object' && 'value' in item) {
+              const value = (item as { value?: unknown }).value
+              return typeof value === 'string' ? value : ''
+            }
+            return ''
           }
+          const flattened: Record<string, string[]> = {}
+          for (const [provider, list] of Object.entries(cfg.savedModels ?? {})) {
+            flattened[provider] = Array.isArray(list) ? list.map(toText).filter(Boolean) : []
+          }
+          cfg.savedModels = flattened
+          let volc = cfg.savedModels.volcengine
+          if (!volc) {
+            volc = []
+            cfg.savedModels.volcengine = volc
+          }
+          for (const ep of Object.values(legacyEndpoints)) {
+            if (!ep || volc.includes(ep)) continue
+            volc.push(ep)
+          }
+          // 老版本如果是「接入点模式」，当下在用的就是这个模型的 ep
+          if (legacyMode === 'endpoint' && cfg.model && legacyEndpoints[cfg.model]) {
+            cfg.model = legacyEndpoints[cfg.model]
+          }
+          ensureShape(cfg)
         }
         return state
       },
@@ -223,11 +271,17 @@ export function useAIProvider(type: AIConfigType) {
     setCustomBaseURL: (url: string) => {
       store.setCustomBaseURL(type, url)
     },
-    setModelValue: (mode: ModelInputMode, value: string) => {
-      store.setModelValue(type, mode, value)
+    setModelValue: (value: string) => {
+      store.setModelValue(type, value)
     },
-    switchModelMode: (mode: ModelInputMode) => {
-      store.switchModelMode(type, mode)
+    addSavedModel: () => {
+      store.addSavedModel(type)
+    },
+    updateSavedModel: (index: number, value: string) => {
+      store.updateSavedModel(type, index, value)
+    },
+    removeSavedModel: (index: number) => {
+      store.removeSavedModel(type, index)
     },
   }
   return {

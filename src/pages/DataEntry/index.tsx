@@ -13,6 +13,7 @@ import {
   Settings2,
   Table,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -29,7 +30,6 @@ import type { LedgerSyncConfig } from 'shared/ledgerSync'
 import {
   COMPUTED_DEPENDENCY_KEYS,
   computeDerivedValues,
-  convertColumnValue,
   generateColumnKey,
   getDefaultColumns,
   LIVE_REPORT_COLUMNS,
@@ -51,22 +51,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { ModelInputMode } from '@/hooks/useAIProvider'
-import { getEffectiveModel, getEndpointForCurrentModel, useAIProvider } from '@/hooks/useAIProvider'
+import { getEffectiveModel, getSavedModels, useAIProvider } from '@/hooks/useAIProvider'
 import { useToast } from '@/hooks/useToast'
-
-/**
- * 火山方舟常用视觉模型——只是**一键填入**的快捷项，不是白名单：
- * 模型那栏仍然可以手填任意模型 ID，或者你控制台里创建的接入点 `ep-xxxxxxxx`。
- *
- * 价格（2026-11 官方价，元/百万 tokens）：pro 输入 6 / 输出 30；turbo 约一半；lite 约 1/7。
- * 识别这种「照抄数字」的活，turbo 通常够用；lite 在模糊小字上容易读错。
- */
-const VOLC_VISION_MODELS = [
-  { id: 'doubao-seed-2-1-pro-260915', name: 'Seed 2.1 pro', note: '最强，价格基准' },
-  { id: 'doubao-seed-2-1-turbo-260628', name: 'Seed 2.1 turbo', note: '同代、约半价、更快' },
-  { id: 'doubao-seed-2-0-lite-260428', name: 'Seed 2.0 lite', note: '最便宜、小字易错' },
-]
 
 /** 规则框最大高度：到顶后内部滚动，别把列表撑满整屏 */
 const RULE_BOX_MAX_HEIGHT = 120
@@ -694,6 +680,48 @@ function ColumnManagerModal({
       setDraft(getDefaultColumns())
     }
   }
+  /**
+   * 从外部表格导入字段：读第一行表头，一次性变成标签列。
+   * 用户 2026-11-06：一个一个手加太麻烦。重名的自动跳过，不会覆盖已有列的配置。
+   */
+  const importFromFile = useCallback(async () => {
+    const headers = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.importColumnHeaders)
+    if (!headers) return
+    const texts = headers.map(h => String(h ?? '').trim()).filter(Boolean)
+    if (texts.length === 0) {
+      toast.error('没读到表头：请确认文件第一行就是字段名')
+      return
+    }
+    const seen = new Set(draft.map(c => c.label.trim()))
+    const fresh: string[] = []
+    for (const label of texts) {
+      if (seen.has(label)) continue
+      seen.add(label)
+      fresh.push(label)
+    }
+    if (fresh.length === 0) {
+      toast.error(`这 ${texts.length} 个字段都已经有了，没有可新增的`)
+      return
+    }
+    setDraft(prev => {
+      const next = [...prev]
+      for (const label of fresh) {
+        next.push({
+          platform,
+          key: generateColumnKey(next),
+          label,
+          unit: 'text',
+          source: 'manual',
+          group: '导入',
+        })
+      }
+      return next
+    })
+    toast.success(
+      `已导入 ${fresh.length} 个字段` +
+        (texts.length > fresh.length ? `（重名跳过 ${texts.length - fresh.length} 个）` : ''),
+    )
+  }, [draft, platform, toast])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -723,6 +751,15 @@ function ColumnManagerModal({
                 ))}
               </div>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-1.5 text-[11px]"
+              onClick={importFromFile}
+              title="选一个 Excel / CSV，把第一行表头一次性导成字段"
+            >
+              <Upload className="w-3 h-3 mr-0.5" /> 从文件导入
+            </Button>
             <span className="text-xs text-muted-foreground">{draft.length} 列</span>
           </div>
         </div>
@@ -890,7 +927,9 @@ export default function DataEntry() {
     setApiKey,
     setCustomBaseURL,
     setModelValue,
-    switchModelMode,
+    addSavedModel,
+    updateSavedModel,
+    removeSavedModel,
   } = useAIProvider('vision')
 
   /**
@@ -913,20 +952,12 @@ export default function DataEntry() {
   const [syncing, setSyncing] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null)
   /**
-   * 方舟用哪种方式调模型（存在配置里，下次打开还是这个模式）：
-   * - model：直接填模型 ID（需在方舟开通该模型）
-   * - endpoint：填自己在控制台建的推理接入点 ep-xxxxxxxx
-   *
-   * 关键：模型 ID 永远保存在 config.model，接入点按模型 ID 分开存在
-   * config.endpointByModel 里 —— 两个输入框各绑各的，切换模式不动任何值，
-   * 换模型时自动取那个模型自己的 ep，没填过就是空（2026-11-05 用户要求「按模型分别记 ep」）。
+   * 真正发给接口的模型字段：模型栏里写什么就用什么（模型 ID 或 ep-xxx 都行）。
+   * 2026-11-06 起不再有「模型 ID / 接入点」两种模式，只有一份可自建的备用列表。
    */
-  const modelMode: ModelInputMode =
-    config.provider === 'volcengine' ? (config.modelMode ?? 'model') : 'model'
-  /** 当前模型已记住的接入点（没填过就是空） */
-  const currentEndpoint = getEndpointForCurrentModel(config)
-  /** 真正发给接口的模型字段：接入点模式用当前模型的 ep，否则用模型 ID */
   const effectiveModel = getEffectiveModel(config)
+  /** 当前服务商名下攒的备用模型（点一下就切过去） */
+  const savedModels = getSavedModels(config)
   /**
    * 截图多选：按板块记选中的图片 id。
    * 用来「挑几张一起重认」（单张 hover 的「重认」只能一张一张点，用户 2026-11-05 反馈要能多张）。
@@ -1393,11 +1424,7 @@ export default function DataEntry() {
         return
       }
       if (!effectiveModel.trim()) {
-        toast.error(
-          modelMode === 'endpoint'
-            ? '这个模型还没填接入点，请把方舟控制台里的 ep-xxxxxxxx 粘到模型栏'
-            : '请先填写模型 ID，或切到「用接入点 ep-」填接入点',
-        )
+        toast.error('请先填写模型（模型 ID 或方舟接入点 ep-xxxxxxxx）')
         return
       }
       // 用 ref 判重（state 是异步的，连点两下会穿透）
@@ -1513,7 +1540,6 @@ export default function DataEntry() {
       sectionLabel,
       setImagesOf,
       sectionNotes,
-      modelMode,
     ],
   )
 
@@ -1990,36 +2016,6 @@ export default function DataEntry() {
   )
 
   /** 导出该平台的行（只用该平台自己的列） */
-  const handleExport = useCallback(
-    async (platform: LiveControlPlatform) => {
-      const platformColumns = columns.filter(c => c.platform === platform)
-      const platformRows = rows.filter(r => r.platform === platform)
-      if (platformRows.length === 0) {
-        toast.error('这个平台还没有数据')
-        return
-      }
-      const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
-      if (!outputPath) return
-      try {
-        const convertedRows = platformRows.map(row => {
-          const converted: Record<string, string> = {}
-          for (const c of platformColumns) {
-            converted[c.key] = convertColumnValue(c, row.values[c.key] ?? '')
-          }
-          return converted
-        })
-        const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportExcel, {
-          rows: convertedRows,
-          outputPath,
-          columns: platformColumns,
-        })
-        toast.success(`已导出${platformLabels[platform]} ${platformRows.length} 行：${saved}`)
-      } catch (error) {
-        toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
-      }
-    },
-    [rows, columns, toast],
-  )
 
   return (
     <div className="container py-8 space-y-6 max-w-6xl">
@@ -2145,9 +2141,10 @@ export default function DataEntry() {
                   </div>
 
                   {/* 规则列表：一条一行、随内容长高。常用模板、「已写 N 条」提示、
-                      底部重复的「添加一条」都已按用户要求删掉；空规则不会发给模型 */}
+                      底部重复的「添加一条」都已按用户要求删掉；空规则不会发给模型。
+                      高度封顶约 4 行（104px），规则再多就在这里上下滑动，不把页面顶长 */}
                   {(sectionNotes[pf] ?? []).length > 0 && (
-                    <div className="mt-1 max-h-56 space-y-0.5 overflow-y-auto pr-1">
+                    <div className="rule-scroll mt-1 max-h-[104px] space-y-0.5 overflow-y-auto overscroll-contain pr-1">
                       {(sectionNotes[pf] ?? []).map((note, i) => (
                         <div
                           // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
@@ -2413,8 +2410,24 @@ export default function DataEntry() {
                 )}
 
                 <div className="flex flex-wrap gap-2 border-t pt-3">
-                  <Button size="sm" onClick={() => handleExport(pk)}>
-                    <Table className="w-4 h-4 mr-1" /> 导出「{sectionLabel(pf)}」 {pfRows.length} 行
+                  {/* 不再单独导出一个文件：直接写进「总表」那个 .xlsx（用户 2026-11-06：
+                      不用重复导出文件，统一同步到总表） */}
+                  <Button
+                    size="sm"
+                    onClick={ledgerSync.enabled ? handleSyncNow : handleStartLedgerSync}
+                    disabled={syncing || ledgerExportPayload.rows.length === 0}
+                    title={
+                      ledgerSync.filePath
+                        ? `写入：${ledgerSync.filePath}`
+                        : '选一个表格文件，之后总表一变就自动写进去'
+                    }
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-1" />
+                    {syncing
+                      ? '同步中…'
+                      : ledgerSync.enabled
+                        ? `同步到总表 · ${syncFileName}`
+                        : '同步到总表（先选文件）'}
                   </Button>
                   <Button
                     size="sm"
@@ -2685,97 +2698,64 @@ export default function DataEntry() {
                 </SelectContent>
               </Select>
             ) : (
-              <div className="space-y-1">
-                {/* 方舟两种调法：直连模型 ID / 自己建的推理接入点 ep-xxx。
-                    给两个明确的切换入口，别让人猜 ep 该填哪。 */}
-                {config.provider === 'volcengine' && (
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        switchModelMode('model')
-                        toast.success('已切到「模型 ID」：填 doubao-xxx，需在方舟先开通该模型')
-                      }}
-                      className={`rounded border px-2 py-0.5 text-[10px] transition ${
-                        modelMode === 'model'
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-border text-muted-foreground hover:border-primary/50'
-                      }`}
-                    >
-                      用模型 ID
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        switchModelMode('endpoint')
-                        toast.success('已切到「接入点」：把方舟控制台里的 ep-xxxxxxxx 粘进来')
-                      }}
-                      className={`rounded border px-2 py-0.5 text-[10px] transition ${
-                        modelMode === 'endpoint'
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-border text-muted-foreground hover:border-primary/50'
-                      }`}
-                    >
-                      用接入点 ep-
-                    </button>
-                  </div>
-                )}
-                <Input
-                  value={modelMode === 'endpoint' ? currentEndpoint : config.model}
-                  onChange={e => setModelValue(modelMode, e.target.value)}
-                  placeholder={
-                    config.provider !== 'volcengine'
-                      ? '如 glm-4v-plus'
-                      : modelMode === 'endpoint'
-                        ? 'ep-2026100411306-xxxxx（你在方舟建的接入点）'
-                        : 'doubao-seed-2-1-pro-260915（模型 ID）'
-                  }
-                />
-                {config.provider === 'volcengine' && modelMode === 'model' && (
-                  <>
-                    {/* 一键切常用型号；浏览器原生的 datalist 下拉会挡住下面的按钮，已去掉 */}
-                    <div className="flex flex-wrap gap-1">
-                      {VOLC_VISION_MODELS.map(m => (
+              <div className="space-y-1.5">
+                {/* 模型清单：一行一个模型（模型 ID 或方舟接入点 ep 都行），
+                    每行最前面一个「切换」按钮，点一下立即用它；底部「新增」再添一条。
+                    2026-11-06 用户要求：不要「备用」按钮，改成点新增在下面加一条这样的。 */}
+                <div className="rule-scroll max-h-[136px] space-y-1 overflow-y-auto overscroll-contain pr-1">
+                  {savedModels.map((value, i) => {
+                    const active = value.trim() !== '' && value === config.model
+                    return (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: 模型清单是「一行一个输入框」，顺序就是它的身份
+                      <div key={`model-row-${i}`} className="flex items-center gap-1">
                         <button
-                          key={m.id}
                           type="button"
-                          onClick={() => setModelValue('model', m.id)}
-                          className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
-                            config.model === m.id
-                              ? 'border-primary bg-primary/10 text-primary'
-                              : 'border-border text-muted-foreground hover:border-primary/50'
+                          onClick={() => {
+                            setModelValue(value)
+                            toast.success('已切到这个模型')
+                          }}
+                          disabled={!value.trim() || active}
+                          className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-medium transition ${
+                            active
+                              ? 'bg-primary/20 text-primary'
+                              : value.trim()
+                                ? 'bg-muted text-muted-foreground hover:bg-primary/15 hover:text-primary'
+                                : 'bg-muted/40 text-muted-foreground/50'
                           }`}
-                          title={`${m.id} — ${m.note}`}
+                          title={active ? '当前正在用这个模型' : '切到这个模型'}
                         >
-                          {m.name}
+                          {active ? '当前' : '切换'}
                         </button>
-                      ))}
-                    </div>
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      直连模型 ID 需要先在方舟「开通」这个模型，开通后直接填上面的 ID 即可。
-                    </p>
-                  </>
-                )}
-                {config.provider === 'volcengine' && modelMode === 'endpoint' && (
-                  <>
-                    <p className="text-[10px] text-muted-foreground">
-                      现在填的是「{config.model || '（先在模型 ID 模式选一个模型）'}」的接入点
-                      {currentEndpoint
-                        ? ' · 已记住，换模型互不影响'
-                        : ' · 这个模型还没填过，所以是空的'}
-                    </p>
-                    {currentEndpoint.trim().startsWith('ep-') && (
-                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400">
-                        ✓ 已记住，下次打开还在；切到「模型 ID」也不会丢
-                      </p>
-                    )}
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      去方舟控制台 →「在线推理」→ 创建接入点 → 选中 doubao 视觉模型 → 把生成的{' '}
-                      <code className="px-0.5">ep-xxxxxxxx</code>
-                      填到这里。每个模型的接入点分开记，换模型会自动换成它自己的那份。
-                    </p>
-                  </>
-                )}
+                        <Input
+                          value={value}
+                          onChange={e => updateSavedModel(i, e.target.value)}
+                          placeholder={
+                            config.provider === 'volcengine'
+                              ? 'doubao-seed-2-1-turbo-260628 或 ep-2026...'
+                              : '如 glm-4v-plus'
+                          }
+                          className="h-8 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeSavedModel(i)}
+                          className="shrink-0 rounded p-1 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive"
+                          title="删掉这一条（不影响当前在用的）"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px]"
+                  onClick={addSavedModel}
+                >
+                  <Plus className="w-3 h-3 mr-1" /> 新增
+                </Button>
               </div>
             )}
           </div>

@@ -17,22 +17,22 @@ import { useToast } from '@/hooks/useToast'
 import { cn } from '@/lib/utils'
 
 const getMessageColor = (type: Message['msg_type']) => {
-    switch (type) {
-      case 'room_enter':
-        return 'text-muted-foreground'
-      case 'room_like':
-        return 'text-muted-foreground'
-      case 'room_follow':
-        return 'text-muted-foreground'
-      case 'subscribe_merchant_brand_vip':
-        return 'text-warning'
-      case 'live_order':
-        return 'text-success'
-      case 'ecom_fansclub_participate':
-        return 'text-muted-foreground'
-      default:
-        return 'text-foreground'
-    }
+  switch (type) {
+    case 'room_enter':
+      return 'text-muted-foreground'
+    case 'room_like':
+      return 'text-muted-foreground'
+    case 'room_follow':
+      return 'text-muted-foreground'
+    case 'subscribe_merchant_brand_vip':
+      return 'text-warning'
+    case 'live_order':
+      return 'text-success'
+    case 'ecom_fansclub_participate':
+      return 'text-muted-foreground'
+    default:
+      return 'text-foreground'
+  }
 }
 
 const getMessageText = (message: Message) => {

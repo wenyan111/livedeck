@@ -288,10 +288,12 @@ export class WechatChannelPlatform
       waitUntil: 'domcontentloaded',
     })
 
-    // 微信视频号有三种可能
+    // 微信视频号有四种可能
     // 1. 未登录 -> 跳转登录页面
     // 2. 已登录但未开播 -> 跳转到首页
     // 3. 已登录且开播 -> 正常访问中控台
+    // 4. 这场被平台直接掐断（违规/断流）-> 整页「直播已结束 + 因违反《…》」
+    //    第 4 种既不会跳首页、也没有评论框，如果不单独认一下，connect 会一直挂在 race 里
     await Promise.race([
       page.waitForURL(REGEXPS.LOGIN_PAGE, {
         timeout: 0,
@@ -300,7 +302,31 @@ export class WechatChannelPlatform
         timeout: 0,
       }),
       page.waitForURL(REGEXPS.INDEX_PAGE, { timeout: 0 }),
+      page.waitForFunction(
+        () => {
+          const text = (document.body?.textContent ?? '').replace(/\s+/g, '')
+          return text.includes('本场直播已结束') || text.includes('因违反《微信视频号直播')
+        },
+        { timeout: 0, polling: 1000 },
+      ),
     ])
+
+    // 平台判定违规/断流后结束的这场直播：救不回来，必须让人重新开播
+    const endedByPlatform = await page.evaluate(() => {
+      const text = (document.body?.textContent ?? '').replace(/\s+/g, '')
+      return text.includes('本场直播已结束') || text.includes('因违反《微信视频号直播')
+    })
+    if (endedByPlatform) {
+      // 顺手把「我知道了」点掉，页面留在原处好让人自己看原因
+      await page
+        .locator('text=我知道了')
+        .first()
+        .click({ timeout: 3000 })
+        .catch(() => {})
+      throw new Error(
+        '视频号这场直播已被平台结束（违规或断流），中控台已不可用，请重新开播后再连接。原因请看「视频号助手 > 首页 > 通知中心」',
+      )
+    }
 
     // 未开播，跳转到首页了
     if (REGEXPS.INDEX_PAGE.test(page.url())) {

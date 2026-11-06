@@ -149,12 +149,18 @@ export default function ConfigTransfer() {
               <p className="font-medium text-foreground">会带走什么</p>
               <p>
                 自动回复（关键词 / AI 提示词 / 黑名单 / @ 回复开关）、开价话术、自动弹窗、批量话术、
-                跨平台开价联动、快速开始选中项、AI 助手的模型配置、直播日报的列配置与已填数据。
+                跨平台开价联动、快速开始选中项、AI 助手的服务商与 API Key、
+                <b>备用模型列表</b>、直播日报的列配置（含列顺序、类型、小数位）、
+                已填数据，以及每个板块的<b>填写规则</b>。
               </p>
               <p className="font-medium text-foreground pt-2">不会带走什么</p>
               <p>
                 <b>平台登录态</b>（cookie）——换电脑需要重新扫码登录，这是刻意的：跨机器复制登录凭据
                 有风控风险。另外「这台机器上有哪些账号」也不会覆盖，避免打乱本机账号列表。
+              </p>
+              <p>
+                <b>表格实时同步的文件路径</b>也不带：那是本机的绝对路径，换了机器得重新选一次文件
+                （直播日报页 →「实时写入表格」→ 选择文件）。
               </p>
               <p className="font-medium text-foreground pt-2">注意</p>
               <p>

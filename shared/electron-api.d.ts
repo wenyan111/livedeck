@@ -211,6 +211,7 @@ export interface IpcChannels {
     outputPath: string
     columns?: LiveReportColumn[]
   }) => string
+  [IPC_CHANNELS.dataEntry.importColumnHeaders]: () => Promise<string[] | null>
   [IPC_CHANNELS.dataEntry.generateTemplate]: (params: {
     outputPath: string
     columns?: LiveReportColumn[]

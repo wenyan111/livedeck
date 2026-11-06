@@ -18,7 +18,14 @@ export interface StreamEndSignal {
 
 export const STREAM_END_SIGNALS: Partial<Record<LiveControlPlatform, StreamEndSignal[]>> = {
   kuaishou: [{ text: '本场直播已结束', scope: 'any' }],
-  wxchannel: [{ text: '生成直播回放视频', scope: 'any' }],
+  wxchannel: [
+    // 正常下播：会弹「生成直播回放视频」
+    { text: '生成直播回放视频', scope: 'any' },
+    // 被平台直接掐断（违规 / 断流）：整页变成「直播已结束 + 因违反《微信视频号直播…》」，
+    // 既不会跳首页、也不会弹回放窗，只认上面那条的话会一直以为这场还在播（2026-11-06 用户反馈）
+    { text: '本场直播已结束', scope: 'any' },
+    { text: '因违反《微信视频号直播', scope: 'any' },
+  ],
   taobao: [{ text: '直播间状态无效', scope: 'any' }],
   xiaohongshu: [{ text: '直播已结束', scope: 'modal' }],
   douyin: [{ text: '直播已结束', scope: 'modal' }],

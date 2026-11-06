@@ -103,6 +103,8 @@ export const IPC_CHANNELS = {
     selectOutputPath: 'dataEntry:selectOutputPath',
     exportExcel: 'dataEntry:exportExcel',
     generateTemplate: 'dataEntry:generateTemplate',
+    /** 从外部 Excel/CSV 里读表头，一次性变成字段（用户 2026-11-06 要求） */
+    importColumnHeaders: 'dataEntry:importColumnHeaders',
     getColumns: 'dataEntry:getColumns',
     saveColumns: 'dataEntry:saveColumns',
     // 视觉模板校准

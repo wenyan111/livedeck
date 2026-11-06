@@ -1,6 +1,6 @@
 import type { Page, Response } from 'playwright'
-import { MessageDeduplicator } from '#/utils/dedup'
 import { sleep } from '#/utils'
+import { MessageDeduplicator } from '#/utils/dedup'
 import type { ICommentListener } from '../IPlatform'
 import { SELECTORS, URLS } from './constant'
 

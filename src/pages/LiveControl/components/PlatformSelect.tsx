@@ -1,4 +1,5 @@
 import React from 'react'
+import { platformLabels } from '@/abilities'
 import {
   Select,
   SelectContent,
@@ -6,7 +7,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { platformLabels } from '@/abilities'
 import { useCurrentLiveControl, useCurrentLiveControlActions } from '@/hooks/useLiveControl'
 
 const basePlatforms = platformLabels
