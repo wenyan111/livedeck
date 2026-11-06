@@ -2597,56 +2597,31 @@ export default function DataEntry() {
                 <table className="w-max border-collapse text-[11px]">
                   <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
                     <tr>
+                      {/* 只有「板块」是固定列；其余字段严格按你在「管理列」里定的顺序排，
+                          以前把 日期/场次 单独拎到最前面、还过滤掉了 周标签，
+                          结果顺序和列配置对不上、还少列（2026-11-06 用户反馈） */}
                       <th className="min-w-[92px] border-b border-r px-2 py-1 text-left font-semibold">
                         板块
                       </th>
-                      <th className="min-w-[92px] border-b px-2 py-1 text-left font-semibold">
-                        日期
-                      </th>
-                      <th className="min-w-[70px] border-b px-2 py-1 text-left font-semibold">
-                        场次
-                      </th>
-                      {/* 日期 / 场次 已经固定在最左边那三列里，其余字段（含「周标签」）都按列配置显示；
-                          以前把 weekLabel 也过滤掉了，用户改名成「周标签1」后总表里根本看不到（2026-11-06） */}
-                      {ledgerColumns
-                        .filter(c => c.key !== 'date' && c.key !== 'session')
-                        .map(c => (
-                          <th
-                            key={c.key}
-                            className="min-w-[76px] border-b px-2 py-1 text-left font-semibold"
-                            title={c.key}
-                          >
-                            {c.label}
-                          </th>
-                        ))}
+                      {ledgerColumns.map(c => (
+                        <th
+                          key={c.key}
+                          className="min-w-[76px] border-b px-2 py-1 text-left font-semibold"
+                          title={c.key}
+                        >
+                          {c.label}
+                        </th>
+                      ))}
                       <th className="border-b px-2 py-1" />
                     </tr>
                   </thead>
                   <tbody>
                     {ledgerRows.map(r => {
-                      const cols = ledgerColumns.filter(
-                        c => c.key !== 'date' && c.key !== 'session',
-                      )
+                      const cols = ledgerColumns
                       return (
                         <tr key={r.id} className="hover:bg-muted/40">
                           <td className="border-b border-r px-2 py-1 text-muted-foreground">
                             {r.sectionName}
-                          </td>
-                          <td className="border-b px-0.5 py-0.5">
-                            <input
-                              value={r.values.date ?? ''}
-                              onChange={e => updateLedgerCell(r.id, 'date', e.target.value)}
-                              placeholder="—"
-                              className="w-full min-w-[88px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
-                            />
-                          </td>
-                          <td className="border-b px-0.5 py-0.5">
-                            <input
-                              value={r.values.session ?? ''}
-                              onChange={e => updateLedgerCell(r.id, 'session', e.target.value)}
-                              placeholder="—"
-                              className="w-full min-w-[66px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
-                            />
                           </td>
                           {cols.map(c => (
                             <td key={c.key} className="border-b px-0.5 py-0.5">
