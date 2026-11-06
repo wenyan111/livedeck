@@ -277,6 +277,11 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
     return String(Math.abs(num) <= 1 && num !== 0 ? +(num * 100).toFixed(4) : num)
   }
 
+  // none（原始数值）：如果模型还是给了「0.0368万」这种，换成 368，别把万写进数字列
+  if (column.unit === 'none' && /万/.test(text)) {
+    const num = Number.parseFloat(text.replace(/[^\d.-]/g, ''))
+    if (!Number.isNaN(num)) return roundByColumn(String(+(num * 10000).toFixed(4)), column)
+  }
   // none：保留原文（通常为数字），但按列配置四舍五入
   return roundByColumn(text, column)
 }

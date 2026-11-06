@@ -111,8 +111,18 @@ function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): str
   // AI 判断类字段：不给「照抄」的模板，要求模型结合截图自己下结论
   const aiCols = targetCols.filter(c => c.source === 'ai')
   // 用「键名（含义）→ 例：数值」格式，避免模型把含义当成值
+  const unitText = (unit?: string) =>
+    unit === 'wan'
+      ? '万'
+      : unit === 'percent'
+        ? '%'
+        : unit === 'hour'
+          ? '小时'
+          : unit === 'text'
+            ? '文本'
+            : '原始数值'
   const items = targetCols
-    .map(c => `- "${c.key}"（含义：${c.label}）→ 例：从截图读到的真实数值`)
+    .map(c => `- "${c.key}"（含义：${c.label}；单位：${unitText(c.unit)}）→ 从截图读到的真实值`)
     .join('\n')
   return (
     '请从这些直播数据截图中，逐个读取下面每个指标的真实数值。\n\n' +
@@ -123,12 +133,12 @@ function buildUserPrompt(columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS): str
     `   - 例："viewersWan" 的值应返回 5.32 这样的数字，绝对不能返回 "观看人数（w）" 或 "viewersWan" 这种文字。\n` +
     `   - 例："payGmv" 的值应返回 5234.5 这样的数字，绝对不能返回 "GMV" 或 "支付GMV"。\n` +
     `3. 截图中能看到的指标一律填写，近似也可；完全看不到/图上没有的才用 ""。\n` +
-    '4. 单位处理：\n' +
-    `   - 键名含 Wan（如 viewersWan）：**一律带上「万」字返回** —— 截图写「12.3万」返回 "12.3万"；\n` +
-    `     截图写「9700」这种个数，请自己换算成 "0.97万"。带「万」或「亿」程序会自动处理，千万别既换算又不写单位。\n` +
-    '   - 键名含 Hour（如 durationHour）：返回小时数（2:30:00→2.5）。\n' +
-    '   - 键名含 Rate/Ratio：返回百分数数字（35%→35）。\n' +
-    '   - 其余数值按原样返回。\n' +
+    '4. 单位处理（**以下面标注的「单位」为准，不要看键名猜**）：\n' +
+    `   - 单位「万」：带上「万」字返回 —— 截图写「12.3万」返回 "12.3万"；截图写「9700」就写 "0.97万"。\n` +
+    '   - 单位「原始数值」：**按截图原样返回数字，绝对不要换算成万、也不要加「万」字**（368 就返回 368）。\n' +
+    '   - 单位「%」：返回带百分号的数（35%→35）。\n' +
+    '   - 单位「小时」：返回小时数（2:30:00→2.5）。\n' +
+    '   - 单位「文本」：原样抄文字。\n' +
     (aiCols.length > 0
       ? `\n【需要你判断的字段（共 ${aiCols.length} 项）】\n${aiCols
           .map(c => `- "${c.key}"（${c.label}）`)
