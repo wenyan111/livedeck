@@ -719,40 +719,47 @@ function ColumnManagerModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="rounded-lg bg-card shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
-        <div className="px-5 py-4 border-b flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold">管理列（标签）</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              可新增 / 删除 / 改名标签，也可改单位与类型。修改后导出与识别会随之更新。
-            </p>
+        {/* 头部收成两行：第一行只有标题/说明/列数，第二行才是操作按钮，
+            原来全挤在一行，说明文字被按钮顶成三行（用户 2026-11-06：太乱） */}
+        <div className="border-b px-5 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold">管理列（标签）</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                可新增 / 删除 / 改名，也能改单位与类型；改完点「保存」生效。
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+              {draft.length} 列
+            </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2">
             <Button
               size="sm"
               variant="outline"
-              className="h-6 px-1.5 text-[11px]"
+              className="h-7 px-2 text-[11px]"
               onClick={importFromFile}
               title="选一个 Excel / CSV，把第一行表头一次性导成字段"
             >
-              <Upload className="w-3 h-3 mr-0.5" /> 从文件导入
+              <Upload className="w-3 h-3 mr-1" /> 从文件导入
             </Button>
-            <span className="text-xs text-muted-foreground">{draft.length} 列</span>
+            <span className="flex-1" />
             {/* 字段太多时一个个点垃圾桶太慢：勾选后一次删掉，或一键清空（用户 2026-11-06） */}
             <Button
               size="sm"
               variant="outline"
-              className="h-6 px-1.5 text-[11px] text-destructive hover:text-destructive"
+              className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
               onClick={removeSelected}
               disabled={selected.size === 0}
               title="把勾选的字段一次删掉"
             >
-              <Trash2 className="w-3 h-3 mr-0.5" /> 删除选中
+              <Trash2 className="w-3 h-3 mr-1" /> 删除选中
               {selected.size > 0 ? ` (${selected.size})` : ''}
             </Button>
             <Button
               size="sm"
               variant="ghost"
-              className="h-6 px-1.5 text-[11px] text-destructive hover:text-destructive"
+              className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
               onClick={removeAll}
               disabled={draft.length === 0}
               title="清空本板块所有字段"
@@ -1304,6 +1311,12 @@ export default function DataEntry() {
   }, [config.provider, setConfig])
 
   const apiKey = apiKeys[config.provider] ?? ''
+  /** 视觉模型配置默认收起，只显示摘要；没填过 Key 时自动展开一次 */
+  const [visionConfigOpen, setVisionConfigOpen] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在首次挂载时判断一次，之后由用户手动开合
+  useEffect(() => {
+    if (!apiKey) setVisionConfigOpen(true)
+  }, [])
 
   const providerOptions = useMemo(() => Object.entries(providers), [])
   const modelOptions = providers[config.provider]?.models ?? []
@@ -2678,110 +2691,142 @@ export default function DataEntry() {
         </Card>
       )}
 
-      {/* 视觉模型配置 */}
+      {/* 视觉模型配置：默认收成一条摘要（左边配置按钮，右边提供商/模型），
+          点「配置 API Key」才展开完整表单（用户 2026-11-06 要的样式） */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">视觉识别模型</CardTitle>
-          <CardDescription className="text-xs">截图识别用的模型，填过一次就会记住</CardDescription>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="space-y-2">
-            <Label className="text-[11px] text-muted-foreground">服务商</Label>
-            <Select
-              value={config.provider}
-              onValueChange={p => {
-                const m = providers[p]?.models?.[0] ?? ''
-                setConfig({ provider: p, model: m })
-              }}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8"
+            onClick={() => setVisionConfigOpen(v => !v)}
+            title={visionConfigOpen ? '收起配置' : '展开服务商 / 模型 / API Key 配置'}
+          >
+            <Settings2 className="w-3.5 h-3.5 mr-1.5" />
+            配置 API Key
+            {visionConfigOpen ? (
+              <ChevronUp className="w-3.5 h-3.5 ml-1.5" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 ml-1.5" />
+            )}
+          </Button>
+          <div className="flex min-w-0 items-center gap-2 text-[11px]">
+            <span className="shrink-0 rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground">
+              提供商：{providers[config.provider]?.name ?? config.provider}
+            </span>
+            <span
+              className="max-w-[280px] truncate rounded-md border px-2 py-1 text-muted-foreground"
+              title={config.model || '还没填模型'}
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {providerOptions.map(([key, p]) => (
-                  <SelectItem key={key} value={key}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              模型：{config.model || '未填'}
+            </span>
+            {!apiKey && (
+              <span className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-destructive">
+                还没填 Key
+              </span>
+            )}
           </div>
-
-          <div className="space-y-2">
-            <Label className="text-[11px] text-muted-foreground">模型</Label>
-            {modelOptions.length > 0 ? (
-              <Select value={config.model} onValueChange={m => setConfig({ model: m })}>
+        </div>
+        {visionConfigOpen && (
+          <CardContent className="grid grid-cols-1 gap-3 border-t md:grid-cols-3">
+            <div className="space-y-2">
+              <Label className="text-[11px] text-muted-foreground">服务商</Label>
+              <Select
+                value={config.provider}
+                onValueChange={p => {
+                  const m = providers[p]?.models?.[0] ?? ''
+                  setConfig({ provider: p, model: m })
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {modelOptions.map(m => (
-                    <SelectItem key={m} value={m}>
-                      {m}
+                  {providerOptions.map(([key, p]) => (
+                    <SelectItem key={key} value={key}>
+                      {p.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            ) : (
-              <div className="space-y-1.5">
-                {/* 回到最原始的填法：一个输入框，模型 ID 或方舟接入点 ep-xxxx 都直接填，
-                    下面三个按钮只是「一键填常用型号」，填完还能自己改（2026-11-06 用户要求） */}
-                <Input
-                  value={config.model}
-                  onChange={e => setModelValue(e.target.value)}
-                  placeholder={
-                    config.provider === 'volcengine'
-                      ? 'doubao-seed-2-1-turbo-260628 或 ep-2026...'
-                      : '如 glm-4v-plus'
-                  }
-                />
-                {config.provider === 'volcengine' && (
-                  <div className="flex flex-wrap gap-1">
-                    {VOLC_PRESET_MODELS.map(id => (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => {
-                          setModelValue(id)
-                          toast.success(`已填入 ${VOLC_MODEL_LABELS[id] ?? id}，可以自己改`)
-                        }}
-                        className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
-                          config.model === id
-                            ? 'border-primary bg-primary/10 text-primary'
-                            : 'border-border text-muted-foreground hover:border-primary/50'
-                        }`}
-                        title={id}
-                      >
-                        {VOLC_MODEL_LABELS[id] ?? id}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+            </div>
 
-          <div className="space-y-2">
-            <Label className="text-[11px] text-muted-foreground">API Key</Label>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={e => setApiKey(config.provider, e.target.value)}
-              placeholder="粘贴你的视觉模型 API Key"
-            />
-          </div>
-
-          {config.provider === 'custom' && (
             <div className="space-y-2">
-              <Label className="text-[11px] text-muted-foreground">API 地址</Label>
+              <Label className="text-[11px] text-muted-foreground">模型</Label>
+              {modelOptions.length > 0 ? (
+                <Select value={config.model} onValueChange={m => setConfig({ model: m })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map(m => (
+                      <SelectItem key={m} value={m}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="space-y-1.5">
+                  {/* 回到最原始的填法：一个输入框，模型 ID 或方舟接入点 ep-xxxx 都直接填，
+                    下面三个按钮只是「一键填常用型号」，填完还能自己改（2026-11-06 用户要求） */}
+                  <Input
+                    value={config.model}
+                    onChange={e => setModelValue(e.target.value)}
+                    placeholder={
+                      config.provider === 'volcengine'
+                        ? 'doubao-seed-2-1-turbo-260628 或 ep-2026...'
+                        : '如 glm-4v-plus'
+                    }
+                  />
+                  {config.provider === 'volcengine' && (
+                    <div className="flex flex-wrap gap-1">
+                      {VOLC_PRESET_MODELS.map(id => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => {
+                            setModelValue(id)
+                            toast.success(`已填入 ${VOLC_MODEL_LABELS[id] ?? id}，可以自己改`)
+                          }}
+                          className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
+                            config.model === id
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border text-muted-foreground hover:border-primary/50'
+                          }`}
+                          title={id}
+                        >
+                          {VOLC_MODEL_LABELS[id] ?? id}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[11px] text-muted-foreground">API Key</Label>
               <Input
-                value={customBaseURL}
-                onChange={e => setCustomBaseURL(e.target.value)}
-                placeholder="https://open.bigmodel.cn/api/paas/v4/"
+                type="password"
+                value={apiKey}
+                onChange={e => setApiKey(config.provider, e.target.value)}
+                placeholder="粘贴你的视觉模型 API Key"
               />
             </div>
-          )}
-        </CardContent>
+
+            {config.provider === 'custom' && (
+              <div className="space-y-2">
+                <Label className="text-[11px] text-muted-foreground">API 地址</Label>
+                <Input
+                  value={customBaseURL}
+                  onChange={e => setCustomBaseURL(e.target.value)}
+                  placeholder="https://open.bigmodel.cn/api/paas/v4/"
+                />
+              </div>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       {cropTarget && (
