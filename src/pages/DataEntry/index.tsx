@@ -2084,19 +2084,6 @@ export default function DataEntry() {
                     </CardDescription>
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setColumnModalPlatform(pk)
-                        setColumnModalOpen(true)
-                      }}
-                    >
-                      <Settings2 className="w-4 h-4 mr-1" /> 管理列
-                    </Button>
-                    <Button size="sm" onClick={() => addRow(pk)}>
-                      <Plus className="w-4 h-4 mr-1" /> 新增一行
-                    </Button>
                     {/* 第一个板块是「主板块」，不提供删除入口；其余板块可删，
                       板块内数据会并入第一个板块，不会丢 */}
                     {sectionPlatforms[0] !== pf && (
@@ -2386,9 +2373,31 @@ export default function DataEntry() {
                   )}
                 </div>
 
+                {/* 表格上方的操作条：管理列 / 新增一行（2026-11-06 用户要求从标题栏挪到表格上面） */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-muted-foreground">
+                    {pfRows.length > 0 ? `共 ${pfRows.length} 行` : '还没有数据行'}
+                  </span>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setColumnModalPlatform(pk)
+                        setColumnModalOpen(true)
+                      }}
+                    >
+                      <Settings2 className="w-4 h-4 mr-1" /> 管理列
+                    </Button>
+                    <Button size="sm" onClick={() => addRow(pk)}>
+                      <Plus className="w-4 h-4 mr-1" /> 新增一行
+                    </Button>
+                  </div>
+                </div>
+
                 {pfRows.length === 0 ? (
                   <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                    这个板块还没有数据行，点右上角「新增一行」开始
+                    点上面「新增一行」开始
                   </p>
                 ) : (
                   <div className="space-y-2.5">

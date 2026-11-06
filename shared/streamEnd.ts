@@ -28,6 +28,11 @@ export const STREAM_END_SIGNALS: Partial<Record<LiveControlPlatform, StreamEndSi
   ],
   taobao: [{ text: '直播间状态无效', scope: 'any' }],
   xiaohongshu: [{ text: '直播已结束', scope: 'modal' }],
+  // 小红书蒲公英是独立平台 key（'pgy'），不写这条它关播后永远不会自动断开（2026-11-06 用户反馈）
+  pgy: [
+    { text: '直播已结束', scope: 'modal' },
+    { text: '本场数据', scope: 'modal' },
+  ],
   douyin: [{ text: '直播已结束', scope: 'modal' }],
   buyin: [{ text: '直播已结束', scope: 'modal' }],
 }
