@@ -254,8 +254,12 @@ export function convertColumnValue(column: LiveReportColumn, raw: string): strin
     if (wan) return String(+Number(wan[1]).toFixed(4))
     const num = Number.parseFloat(text.replace(/[^\d.-]/g, ''))
     if (Number.isNaN(num)) return text
-    // 没写单位：>=100 视为「个」（0.01万以上），除以一万；再大的也照此处理
-    return Math.abs(num) >= 100 ? String(+(num / 10000).toFixed(4)) : String(num)
+    // 没写单位时的判断（宁可少换，不可换错）：
+    //   有小数点 → 认为已经是「万」（0.97 / 10.07 / 91.5）
+    //   纯整数且 >= 1000 → 认为是个数（9700 → 0.97），除数一万
+    //   纯整数 < 1000 → 保持（91 / 120 这种通常就是「91万 / 120万」）
+    if (text.includes('.')) return String(num)
+    return Math.abs(num) >= 1000 ? String(+(num / 10000).toFixed(4)) : String(num)
   }
 
   // ── 小时 ───────────────────────────────────────────────────────
