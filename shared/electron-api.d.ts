@@ -8,6 +8,14 @@ import { IPC_CHANNELS } from './ipcChannels'
 import type { LedgerSyncConfig } from './ledgerSync'
 import type { LiveReportColumn } from './liveReportColumns'
 
+/** 一个板块 = 一个工作表：各平台字段不一样，不能挤在同一张表里（2026-11-06 用户要求） */
+export type LedgerSheetPayload = {
+  /** 工作表名（板块名） */
+  name: string
+  columns: LiveReportColumn[]
+  rows: Record<string, string>[]
+}
+
 export interface IpcChannels {
   // LiveControl
   [IPC_CHANNELS.tasks.liveControl.connect]: (params: {
@@ -242,8 +250,7 @@ export interface IpcChannels {
   [IPC_CHANNELS.dataEntry.upsertLedger]: (records: LedgerRecord[]) => LedgerRecord[]
   [IPC_CHANNELS.dataEntry.saveLedger]: (records: LedgerRecord[]) => LedgerRecord[]
   [IPC_CHANNELS.dataEntry.exportLedger]: (params: {
-    rows: Record<string, string>[]
-    columns: LiveReportColumn[]
+    sheets: LedgerSheetPayload[]
     outputPath: string
   }) => string
   // 实时同步到本机表格（xlsx）
@@ -252,8 +259,7 @@ export interface IpcChannels {
   /** 弹系统保存框选目标文件；用户取消返回 null */
   [IPC_CHANNELS.dataEntry.chooseLedgerSyncPath]: () => string | null
   [IPC_CHANNELS.dataEntry.syncLedgerXlsx]: (params: {
-    rows: Record<string, string>[]
-    columns: LiveReportColumn[]
+    sheets: LedgerSheetPayload[]
     outputPath: string
   }) => string
 

@@ -165,7 +165,7 @@ function setupIpcHandlers() {
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.exportLedger, async (_, params) => {
     // 总表的「板块 / 平台」两列由渲染进程拼好，这里只负责落盘
-    return await tableFileService.exportRows(params.rows, params.outputPath, params.columns)
+    return await xlsxExportService.writeLedgerXlsx(params.sheets, params.outputPath)
   })
 
   // ── 实时同步到本机表格（xlsx） ──
@@ -193,7 +193,7 @@ function setupIpcHandlers() {
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.syncLedgerXlsx, async (_, params) => {
-    return await xlsxExportService.writeLedgerXlsx(params.rows, params.columns, params.outputPath)
+    return await xlsxExportService.writeLedgerXlsx(params.sheets, params.outputPath)
   })
 }
 

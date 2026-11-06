@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
+import type { LedgerSheetPayload } from 'shared/electron-api'
 import type { LiveReportColumn } from 'shared/liveReportColumns'
 import { createLogger } from '#/logger'
 
@@ -73,69 +74,79 @@ const CELL_BORDER: ExcelJS.Borders = {
 export class XlsxExportService {
   private logger = createLogger('表格同步')
 
-  async writeLedgerXlsx(
-    rows: Record<string, string>[],
-    columns: LiveReportColumn[],
-    outputPath: string,
-  ): Promise<string> {
-    /**
-     * ① 输出哪些列：**全部字段都输出**，包括还没填、标了「（留空）」的字段。
-     *    曾经按「这一列有没有数据」筛过，结果用户新加/留空的字段在外部表格里连表头都没有
-     *    （2026-11-06 反复反馈两次）。字段是用户自己在「管理列」里定的，就该原样同步出去。
-     */
-    const usedColumns = columns.filter(c => String(c.label ?? '').trim() !== '')
-
+  /**
+   * 把日报写成 .xlsx：**一个板块一个工作表**。
+   * 各平台字段完全不一样，挤在同一张表里只能取并集，一半列是空的（2026-11-06 用户要求分开）。
+   * 排版照用户给的「英子数据记录.xlsx」：白底、四边细边框、微软雅黑 11、居中、
+   * 表头行高 40 / 数据行 24、列宽跟内容走、冻结表头 + 前几列。数字写成数值类型。
+   * 落盘用「写临时文件 → rename 原子替换」，任何时刻读到的都是完整文件。
+   */
+  async writeLedgerXlsx(sheets: LedgerSheetPayload[], outputPath: string): Promise<string> {
     const workbook = new ExcelJS.Workbook()
     workbook.creator = 'LiveDeck・直播台'
     workbook.created = new Date()
 
-    const sheet = workbook.addWorksheet('日报总表', {
-      views: [
-        {
-          state: 'frozen',
-          ySplit: 1,
-          xSplit: Math.min(6, usedColumns.length),
-          showGridLines: false,
-        },
-      ],
-    })
+    const usedSheetNames = new Set<string>()
+    let maxCols = 1
+    let totalRows = 0
 
-    // ② 列宽自适应：以实际数据为主，长表头折行，不再把整列撑宽
-    sheet.columns = usedColumns.map(c => {
-      let maxData = 0
-      for (const row of rows) {
-        maxData = Math.max(maxData, displayWidth(String(row[c.key] ?? '')))
-      }
-      const width = Math.min(Math.max(maxData + 3, Math.min(displayWidth(c.label), 12) + 2, 9), 22)
-      return { header: c.label, key: c.key, width }
-    })
+    for (const section of sheets) {
+      // 字段按用户配置原样输出，留空/没填过的也要有表头
+      const usedColumns = section.columns.filter(c => String(c.label ?? '').trim() !== '')
+      if (usedColumns.length === 0) continue
+      maxCols = Math.max(maxCols, usedColumns.length)
+      totalRows += section.rows.length
 
-    for (const row of rows) {
-      const line = sheet.addRow(usedColumns.map(c => toCellValue(row[c.key])))
-      usedColumns.forEach((c, i) => {
-        if (isPercentText(row[c.key])) line.getCell(i + 1).numFmt = '0.00%'
+      const sheet = workbook.addWorksheet(this.safeSheetName(section.name, usedSheetNames), {
+        views: [
+          {
+            state: 'frozen',
+            ySplit: 1,
+            xSplit: Math.min(6, usedColumns.length),
+            showGridLines: false,
+          },
+        ],
       })
-    }
 
-    // ③ 逐格套参考表样式：白底 + 四边细边框 + 居中 + 自动换行
-    for (let r = 1; r <= sheet.rowCount; r++) {
-      const line = sheet.getRow(r)
-      line.height = r === 1 ? 40 : 24
-      line.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
-      line.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FF1F2933' } }
-      for (let c = 1; c <= usedColumns.length; c++) {
-        line.getCell(c).border = CELL_BORDER
+      // 列宽自适应：以实际数据为主，长表头折行，不把整列撑宽
+      sheet.columns = usedColumns.map(c => {
+        let maxData = 0
+        for (const row of section.rows) {
+          maxData = Math.max(maxData, displayWidth(String(row[c.key] ?? '')))
+        }
+        const width = Math.min(
+          Math.max(maxData + 3, Math.min(displayWidth(c.label), 12) + 2, 9),
+          22,
+        )
+        return { header: c.label, key: c.key, width }
+      })
+
+      for (const row of section.rows) {
+        const line = sheet.addRow(usedColumns.map(c => toCellValue(row[c.key])))
+        usedColumns.forEach((c, i) => {
+          if (isPercentText(row[c.key])) line.getCell(i + 1).numFmt = '0.00%'
+        })
       }
-    }
 
-    sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1 }
+      // 逐格套参考表样式：白底 + 四边细边框 + 居中 + 自动换行
+      for (let r = 1; r <= sheet.rowCount; r++) {
+        const line = sheet.getRow(r)
+        line.height = r === 1 ? 40 : 24
+        line.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
+        line.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FF1F2933' } }
+        for (let c = 1; c <= usedColumns.length; c++) {
+          line.getCell(c).border = CELL_BORDER
+        }
+      }
+
+      sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1 }
+    }
 
     const buffer = await workbook.xlsx.writeBuffer()
     // 兜底：即便某些值（6.45万 / 32秒 / 日期）必须保持文本，也告诉 Excel/WPS
-    // 整个数据区不要显示任何错误检查标记（绿色小三角）。
-    const finalBuffer = await this.suppressErrorIndicators(Buffer.from(buffer), usedColumns.length)
+    // 数据区不要显示任何错误检查标记（绿色小三角）。
+    const finalBuffer = await this.suppressErrorIndicators(Buffer.from(buffer), maxCols)
 
-    // 原子落盘：先写同目录临时文件，再 rename 覆盖
     await fs.mkdir(path.dirname(outputPath), { recursive: true })
     const tmpPath = path.join(
       path.dirname(outputPath),
@@ -145,9 +156,29 @@ export class XlsxExportService {
     await this.renameWithRetry(tmpPath, outputPath)
 
     this.logger.info(
-      `同步 ${rows.length} 行 / ${usedColumns.length} 列（原始 ${columns.length} 列，已隐藏空列）到 ${outputPath}`,
+      `同步 ${sheets.length} 个板块 / ${totalRows} 行到 ${outputPath}（${sheets
+        .map(s => `${s.name}:${s.rows.length}行`)
+        .join('，')}）`,
     )
     return outputPath
+  }
+
+  /** Excel 工作表名的限制：≤31 字、不能含 []:*?/\\、不能重名 */
+  private safeSheetName(raw: string, used: Set<string>): string {
+    const base =
+      String(raw ?? '')
+        .replace(/[[\]:*?/\\]/g, ' ')
+        .trim()
+        .slice(0, 31) || '板块'
+    let name = base
+    let n = 2
+    while (used.has(name)) {
+      const suffix = `(${n})`
+      name = `${base.slice(0, 31 - suffix.length)}${suffix}`
+      n++
+    }
+    used.add(name)
+    return name
   }
 
   /**
@@ -159,10 +190,11 @@ export class XlsxExportService {
   private async suppressErrorIndicators(xlsx: Buffer, columnCount: number): Promise<Buffer> {
     try {
       const zip = await JSZip.loadAsync(xlsx)
-      const entry = zip.file('xl/worksheets/sheet1.xml')
-      if (!entry) return xlsx
-      let xml = await entry.async('string')
-      if (xml.includes('<ignoredErrors')) return xlsx
+      // 一个板块一个工作表，所以要把每张 sheetN.xml 都补上
+      const sheetPaths = Object.keys(zip.files).filter(f =>
+        /^xl\/worksheets\/sheet\d+\.xml$/.test(f),
+      )
+      if (sheetPaths.length === 0) return xlsx
       // 覆盖整列（Excel 最大行 1048576），以后数据行变多也不用回来改
       const sqref = `A1:${columnLetter(Math.max(columnCount, 1))}1048576`
       const tag =
@@ -170,10 +202,15 @@ export class XlsxExportService {
         `twoDigitTextYear="1" evalError="1" formula="1" formulaRange="1" ` +
         `unlockedFormula="1" emptyCellReference="1" listDataValidation="1" ` +
         `calculatedColumn="1" omitLeadingZeros="1"/></ignoredErrors>`
-      const at = xml.lastIndexOf('</worksheet>')
-      if (at < 0) return xlsx
-      xml = `${xml.slice(0, at)}${tag}${xml.slice(at)}`
-      zip.file('xl/worksheets/sheet1.xml', xml)
+      for (const sheetPath of sheetPaths) {
+        const entry = zip.file(sheetPath)
+        if (!entry) continue
+        const xml = await entry.async('string')
+        if (xml.includes('<ignoredErrors')) continue
+        const at = xml.lastIndexOf('</worksheet>')
+        if (at < 0) continue
+        zip.file(sheetPath, `${xml.slice(0, at)}${tag}${xml.slice(at)}`)
+      }
       return await zip.generateAsync({
         type: 'nodebuffer',
         compression: 'DEFLATE',

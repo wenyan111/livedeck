@@ -1659,37 +1659,41 @@ export default function DataEntry() {
   )
 
   /**
-   * 导出 / 实时同步用的整表数据：不跟总表上方的板块筛选走（永远是整张表），
-   * 并在最前面补「板块」「平台」两列（用户 2026-11-05 反馈表里要能看出数据来自哪）。
+   * 导出 / 实时同步用的数据：**一个板块一张表**。
+   * 各平台字段完全不一样（抖音 53 列、小红书又是另一套），挤成一张表只能取并集、
+   * 一半列全是空的，所以按板块分开，每个工作表只放这个板块自己的字段
+   * （用户 2026-11-06：「分板块这个表，各个平台字段肯定不一样，没办法放一张表里」）。
    */
   const ledgerExportPayload = useMemo(() => {
-    const head: LiveReportColumn[] = [
-      {
-        key: '__section',
-        label: '板块',
-        unit: 'text',
-        source: 'manual',
-        group: '总表',
-        platform: 'douyin',
-      },
-      {
-        key: '__platform',
-        label: '平台',
-        unit: 'text',
-        source: 'manual',
-        group: '总表',
-        platform: 'douyin',
-      },
-    ]
-    const rows = sortLedgerDesc(ledger).map(r => ({
-      ...r.values,
-      // 隐藏字段：只给主进程判断「这条数据属于哪个板块用」，不会变成表头
-      __sectionKey: r.sectionKey,
-      __section: r.sectionName,
-      __platform: PLATFORM_GROUP_LABELS[r.sectionKey] ?? platformLabels[r.platform] ?? r.platform,
-    }))
-    return { rows, columns: [...head, ...ledgerColumns] }
-  }, [ledger, ledgerColumns])
+    // 板块 key → 这个板块自己的字段（保持用户在「管理列」里定的顺序）
+    const columnsBySection = new Map<string, LiveReportColumn[]>()
+    for (const c of columns) {
+      const key = String(c.platform ?? '')
+      if (!key) continue
+      const list = columnsBySection.get(key)
+      if (list) list.push(c)
+      else columnsBySection.set(key, [c])
+    }
+    // 板块 key → 行
+    const rowsBySection = new Map<string, Record<string, string>[]>()
+    for (const r of sortLedgerDesc(ledger)) {
+      const list = rowsBySection.get(r.sectionKey)
+      if (list) list.push({ ...r.values })
+      else rowsBySection.set(r.sectionKey, [{ ...r.values }])
+    }
+    const sheets = [...columnsBySection.entries()]
+      .map(([key, cols]) => ({
+        name: sectionLabel(key),
+        columns: cols,
+        rows: rowsBySection.get(key) ?? [],
+      }))
+      // 一列字段都没有的板块不建表
+      .filter(sheet => sheet.columns.some(c => String(c.label ?? '').trim() !== ''))
+    return {
+      sheets,
+      totalRows: sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0),
+    }
+  }, [ledger, columns, sectionLabel])
 
   /** 同步目标文件名（按钮上显示，路径放在 tooltip 里） */
   const syncFileName = ledgerSync.filePath.split('/').pop() || ''
@@ -1735,7 +1739,7 @@ export default function DataEntry() {
 
   /** 一次性导出整张总表（所有板块、所有日期） */
   const handleExportLedger = useCallback(async () => {
-    if (ledgerExportPayload.rows.length === 0) {
+    if (ledgerExportPayload.totalRows === 0) {
       toast.error('总表还是空的，先在录入页识别/填写数据')
       return
     }
@@ -1743,11 +1747,12 @@ export default function DataEntry() {
     if (!outputPath) return
     try {
       await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.exportLedger, {
-        rows: ledgerExportPayload.rows,
-        columns: ledgerExportPayload.columns,
+        sheets: ledgerExportPayload.sheets,
         outputPath,
       })
-      toast.success(`已导出 ${ledgerExportPayload.rows.length} 行整表到 ${outputPath}`)
+      toast.success(
+        `已导出 ${ledgerExportPayload.sheets.length} 个板块（共 ${ledgerExportPayload.totalRows} 行）到 ${outputPath}`,
+      )
     } catch (error) {
       toast.error(`导出失败：${error instanceof Error ? error.message : String(error)}`)
     }
@@ -1760,8 +1765,7 @@ export default function DataEntry() {
       setSyncing(true)
       try {
         await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.syncLedgerXlsx, {
-          rows: ledgerExportPayload.rows,
-          columns: ledgerExportPayload.columns,
+          sheets: ledgerExportPayload.sheets,
           outputPath,
         })
         setLastSyncedAt(Date.now())
@@ -1810,7 +1814,9 @@ export default function DataEntry() {
       return
     }
     await writeLedgerSync(ledgerSync.filePath)
-    toast.success(`已同步 ${ledgerExportPayload.rows.length} 行 → ${ledgerSync.filePath}`)
+    toast.success(
+      `已同步 ${ledgerExportPayload.sheets.length} 个板块（共 ${ledgerExportPayload.totalRows} 行）→ ${ledgerSync.filePath}`,
+    )
   }, [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast])
 
   /**
@@ -2434,7 +2440,7 @@ export default function DataEntry() {
                   <Button
                     size="sm"
                     onClick={ledgerSync.enabled ? handleSyncNow : handleStartLedgerSync}
-                    disabled={syncing || ledgerExportPayload.rows.length === 0}
+                    disabled={syncing || ledgerExportPayload.totalRows === 0}
                     title={
                       ledgerSync.filePath
                         ? `写入：${ledgerSync.filePath}`
