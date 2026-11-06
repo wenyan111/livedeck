@@ -49,6 +49,9 @@ jobs:
       # 提取 changelog 里当前版本的内容，作为 release 说明
       - name: Extract changelog
         id: changelog
+        # Windows runner 默认是 PowerShell，heredoc 那套写法会把多行输出写坏，
+        # 导致 notes 为空 → 用空 body 覆盖掉 macOS 那边写好的 Release 说明（v1.2.8 就是这么丢的）
+        shell: bash
         run: |
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           node scripts/extract-changelog.js >> $GITHUB_OUTPUT
