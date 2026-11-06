@@ -1652,7 +1652,19 @@ export default function DataEntry() {
   }, [rows, sectionLabel])
 
   // ── 总表：表头（各板块字段并集）、排序后的行 ──
-  const ledgerColumns = useMemo(() => buildLedgerColumns(columns), [columns])
+  /**
+   * 总表的表头：**只取「有数据的板块」自己的字段**。
+   * 以前是全部板块字段并集再按 key 去重，谁排前面用谁的标签 ——
+   * 结果用户在抖音板块把「直播时长（h）」改成「直播时长」，总表里还是显示带（h）的那份
+   * （另一个没数据的板块也有同名字段，且排在前面）。2026-11-06 用户反馈。
+   */
+  const ledgerColumns = useMemo(() => {
+    const target = ledgerFilter
+      ? new Set([ledgerFilter])
+      : new Set(ledger.map(r => String(r.sectionKey ?? '')))
+    const scoped = columns.filter(c => target.has(String(c.platform ?? '')))
+    return buildLedgerColumns(scoped.length > 0 ? scoped : columns)
+  }, [columns, ledger, ledgerFilter])
   const ledgerRows = useMemo(
     () => sortLedgerDesc(ledgerFilter ? ledger.filter(r => r.sectionKey === ledgerFilter) : ledger),
     [ledger, ledgerFilter],

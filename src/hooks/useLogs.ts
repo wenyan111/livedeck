@@ -24,9 +24,11 @@ interface LogsStore {
   errorCount: number
   /** 还没被"看过"的错误数：收起条上的红点用它，展开看过之后清零 */
   unreadErrorCount: number
+  /** 还没被"看过"的警告数（黄色）：收起条上也要一直提醒，不能只有红色（用户 2026-11-06） */
+  unreadWarnCount: number
   clear: () => void
   push: (log: ParsedLog) => void
-  /** 标记错误已读（展开面板 / 点「失败」筛选 时调用） */
+  /** 标记错误/警告已读（展开面板 / 点「失败」筛选 时调用） */
   ackErrors: () => void
 }
 
@@ -34,8 +36,9 @@ export const useLogsStore = create<LogsStore>(set => ({
   messages: [],
   errorCount: 0,
   unreadErrorCount: 0,
-  clear: () => set({ messages: [], errorCount: 0, unreadErrorCount: 0 }),
-  ackErrors: () => set({ unreadErrorCount: 0 }),
+  unreadWarnCount: 0,
+  clear: () => set({ messages: [], errorCount: 0, unreadErrorCount: 0, unreadWarnCount: 0 }),
+  ackErrors: () => set({ unreadErrorCount: 0, unreadWarnCount: 0 }),
   push: log =>
     set(state => {
       const next =
@@ -43,9 +46,11 @@ export const useLogsStore = create<LogsStore>(set => ({
           ? [...state.messages.slice(1), log]
           : [...state.messages, log]
       const isErr = log.level === 'ERROR' || log.level === 'FATAL'
+      const isWarn = log.level === 'WARN' || log.level === 'WARNING'
       return {
         messages: next,
         unreadErrorCount: state.unreadErrorCount + (isErr ? 1 : 0),
+        unreadWarnCount: state.unreadWarnCount + (isWarn ? 1 : 0),
         errorCount:
           state.errorCount +
           (log.level === 'ERROR' || log.level === 'FATAL' ? 1 : 0) -

@@ -24,10 +24,17 @@ export default function LogPanel() {
   const [height, setHeight] = useState(DEFAULT_H)
   const draggingRef = useRef(false)
   const messages = useLogsStore(s => s.messages)
-  // 收起条上显示"未读错误"，展开看过之后清零（用户 2026-11-02 要求）
+  // 收起条上显示"未读错误 / 未读警告"，展开看过之后清零（用户 2026-11-02、2026-11-06 要求）
   const errorCount = useLogsStore(s => s.unreadErrorCount)
+  const warnCount = useLogsStore(s => s.unreadWarnCount)
   const ackErrors = useLogsStore(s => s.ackErrors)
   const latest = messages[messages.length - 1]
+  // 有未读的错误/警告时，收起条固定显示"最近一条问题"，不让它被刷屏的信息顶掉
+  const lastProblem =
+    errorCount + warnCount > 0
+      ? [...messages].reverse().find(m => ['ERROR', 'FATAL', 'WARN', 'WARNING'].includes(m.level))
+      : undefined
+  const headline = lastProblem ?? latest
 
   // 展开即视为已读：列表就在眼前，红点没必要继续亮着；
   // 展开期间新到的错误也一并清掉（用户 2026-11-02：「我去看了之后就消除」）
@@ -80,28 +87,38 @@ export default function LogPanel() {
           </span>
         )}
 
+        {/* 警告（黄色）也要一直挂着，不能只有红色失败（用户 2026-11-06） */}
+        {warnCount > 0 && (
+          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-[hsl(var(--warning))]/15 px-2 py-0.5 text-[12.5px] text-[hsl(var(--warning))]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--warning))]" />
+            {warnCount} 条警告
+          </span>
+        )}
+
         <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
-          {latest ? (
+          {headline ? (
             <>
-              <span className="text-muted-foreground/60">最新</span>
+              <span className="text-muted-foreground/60">{lastProblem ? '问题' : '最新'}</span>
               <span className="mx-1.5 text-muted-foreground/40">|</span>
               <span
                 className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${
-                  LEVEL_DOT[latest.level] ?? 'bg-muted-foreground/40'
+                  LEVEL_DOT[headline.level] ?? 'bg-muted-foreground/40'
                 }`}
               />
-              <span className="text-foreground/80">{prettifyModule(latest.module)}</span>
+              <span className="text-foreground/80">{prettifyModule(headline.module)}</span>
               <span className="mx-1.5 text-muted-foreground/40">·</span>
-              {latest.message}
+              <span className={lastProblem ? 'text-foreground' : undefined}>
+                {headline.message}
+              </span>
             </>
           ) : (
             '暂无日志'
           )}
         </span>
 
-        {latest && (
+        {headline && (
           <span className="shrink-0 tabular-nums text-[13px] text-muted-foreground/60">
-            {latest.timestamp.split(' ')[1] ?? ''}
+            {headline.timestamp.split(' ')[1] ?? ''}
           </span>
         )}
 
