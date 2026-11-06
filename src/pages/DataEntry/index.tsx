@@ -2606,10 +2606,10 @@ export default function DataEntry() {
                       <th className="min-w-[70px] border-b px-2 py-1 text-left font-semibold">
                         场次
                       </th>
+                      {/* 日期 / 场次 已经固定在最左边那三列里，其余字段（含「周标签」）都按列配置显示；
+                          以前把 weekLabel 也过滤掉了，用户改名成「周标签1」后总表里根本看不到（2026-11-06） */}
                       {ledgerColumns
-                        .filter(
-                          c => c.key !== 'date' && c.key !== 'session' && c.key !== 'weekLabel',
-                        )
+                        .filter(c => c.key !== 'date' && c.key !== 'session')
                         .map(c => (
                           <th
                             key={c.key}
@@ -2625,7 +2625,7 @@ export default function DataEntry() {
                   <tbody>
                     {ledgerRows.map(r => {
                       const cols = ledgerColumns.filter(
-                        c => c.key !== 'date' && c.key !== 'session' && c.key !== 'weekLabel',
+                        c => c.key !== 'date' && c.key !== 'session',
                       )
                       return (
                         <tr key={r.id} className="hover:bg-muted/40">
