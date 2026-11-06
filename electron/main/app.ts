@@ -85,6 +85,10 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let win: BrowserWindow | null = null
+/** 用户已点「确认关闭」，避免 app.quit() 再次触发 close 时重复弹窗 */
+let closeConfirmed = false
+/** 防止连点关闭按钮弹出多个确认框 */
+let closePromptOpen = false
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
 
@@ -107,6 +111,39 @@ async function createWindow() {
   })
 
   windowManager.setMainWindow(win)
+
+  /**
+   * 关闭前先确认一次。直播中误点关闭会立刻断开所有平台中控台连接、停掉全部任务，
+   * 重连要 1–2 分钟。事件挂在窗口上，跟关闭按钮在 macOS 左上角还是 Windows 右上角无关，
+   * 两个平台都生效；自动更新 quitAndInstall 会提前 markForceQuit，不打扰升级。
+   */
+  win.on('close', async event => {
+    if (!app.isPackaged || closeConfirmed || windowManager.isForceQuit) return
+    event.preventDefault()
+    if (closePromptOpen) return
+    closePromptOpen = true
+    const target = win
+    try {
+      if (!target || target.isDestroyed()) return
+      const { response } = await dialog.showMessageBox(target, {
+        type: 'warning',
+        title: '确认关闭',
+        message: '确定要关闭 LiveDeck・直播台吗？',
+        detail:
+          '关闭后会立即断开所有平台的中控台连接，自动发言、自动弹窗、自动回复、开价联动等任务全部停止；重新打开需要逐个重连（约 1–2 分钟）。直播过程中请勿关闭。',
+        buttons: ['取消', '确认关闭'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      })
+      if (response === 1) {
+        closeConfirmed = true
+        app.quit()
+      }
+    } finally {
+      closePromptOpen = false
+    }
+  })
 
   /**
    * 窗口变小时**整页等比缩放**，而不是让布局重排挤压。

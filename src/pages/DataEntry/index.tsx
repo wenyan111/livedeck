@@ -10,6 +10,7 @@ import {
   Pause,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Settings2,
   Table,
@@ -790,6 +791,25 @@ function ColumnManagerModal({
   const [overIndex, setOverIndex] = useState<number | null>(null)
   /** 勾选的字段 key（批量删除用，用户 2026-11-06 要求） */
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  /**
+   * 字段搜索（用户 2026-11-07：字段太多不好找）。
+   * 只做**视觉过滤**：渲染时用真实 idx，保存时 onSave(draft) 仍是完整列表，绝不丢字段。
+   * 搜索状态下禁用拖拽 / 全选 / 批量删除，避免误操作到被筛掉的字段。
+   */
+  const [query, setQuery] = useState('')
+  const searching = query.trim().length > 0
+  const visibleRows = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const rows = draft.map((col, idx) => ({ col, idx }))
+    if (!q) return rows
+    return rows.filter(({ col }) =>
+      [col.label, col.key, col.group ?? '', col.unit ?? ''].some(v =>
+        String(v ?? '')
+          .toLowerCase()
+          .includes(q),
+      ),
+    )
+  }, [draft, query])
   const toggleSelected = (key: string) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -934,6 +954,32 @@ function ColumnManagerModal({
             </span>
           </div>
           <div className="mt-2 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="搜索字段名 / key / 分组，快速定位"
+                className="h-8 pl-8 pr-8 text-xs"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  title="清除搜索"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {searching
+                ? `匹配 ${visibleRows.length} / ${draft.length} 列 · 批量操作暂不可用`
+                : ''}
+            </span>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -962,8 +1008,10 @@ function ColumnManagerModal({
               variant="outline"
               className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
               onClick={removeSelected}
-              disabled={selected.size === 0}
-              title="把勾选的字段一次删掉"
+              disabled={selected.size === 0 || searching}
+              title={
+                searching ? '清除搜索后可批量删除（避免误删被筛掉的字段）' : '把勾选的字段一次删掉'
+              }
             >
               <Trash2 className="w-3 h-3 mr-1" /> 删除选中
               {selected.size > 0 ? ` (${selected.size})` : ''}
@@ -973,8 +1021,8 @@ function ColumnManagerModal({
               variant="ghost"
               className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
               onClick={removeAll}
-              disabled={draft.length === 0}
-              title="清空本板块所有字段"
+              disabled={draft.length === 0 || searching}
+              title={searching ? '清除搜索后可清空全部字段' : '清空本板块所有字段'}
             >
               全部删除
             </Button>
@@ -987,11 +1035,18 @@ function ColumnManagerModal({
             <input
               type="checkbox"
               className="h-3.5 w-3.5 cursor-pointer accent-primary"
+              disabled={searching}
               checked={draft.length > 0 && selected.size === draft.length}
               onChange={e => {
                 setSelected(e.target.checked ? new Set(draft.map(c => c.key)) : new Set())
               }}
-              title={selected.size === draft.length ? '取消全选' : '全选'}
+              title={
+                searching
+                  ? '搜索状态下不能全选，清除搜索后可批量操作'
+                  : selected.size === draft.length
+                    ? '取消全选'
+                    : '全选'
+              }
             />
             <span title="拖动手柄可调整列顺序" className="flex justify-center">
               ⇅
@@ -1003,7 +1058,7 @@ function ColumnManagerModal({
             <span title="四舍五入到几位小数">小数位</span>
             <span />
           </div>
-          {draft.map((col, idx) => (
+          {visibleRows.map(({ col, idx }) => (
             // biome-ignore lint/a11y/noStaticElementInteractions: 整行只是拖拽落点，真正的可交互控件是里面的手柄按钮
             <div
               key={col.key}
@@ -1040,7 +1095,8 @@ function ColumnManagerModal({
               {/* 拖动手柄：按下即拖，松手落位；行本身不 draggable，避免和输入框选字打架 */}
               <button
                 type="button"
-                draggable
+                draggable={!searching}
+                disabled={searching}
                 onDragStart={e => {
                   e.dataTransfer.effectAllowed = 'move'
                   e.dataTransfer.setData('text/plain', String(idx))
@@ -1054,7 +1110,11 @@ function ColumnManagerModal({
                   setOverIndex(null)
                 }}
                 className="flex h-8 cursor-grab justify-center rounded text-muted-foreground/70 transition hover:bg-muted hover:text-foreground active:cursor-grabbing"
-                title="按住拖动，换这一列的先后顺序"
+                title={
+                  searching
+                    ? '搜索状态下不能调整顺序，清除搜索后可拖动'
+                    : '按住拖动，换这一列的先后顺序'
+                }
                 aria-label={`拖动调整「${col.label}」的顺序`}
               >
                 <GripVertical className="w-4 h-4 self-center" />
@@ -1156,7 +1216,20 @@ function ColumnManagerModal({
               )}
             </div>
           ))}
-          <Button variant="outline" size="sm" onClick={add} className="mt-1">
+          {searching && visibleRows.length === 0 && (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              没有匹配「{query.trim()}」的字段，换个关键词或清除搜索
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setQuery('')
+              add()
+            }}
+            className="mt-1"
+          >
             <Plus className="w-4 h-4 mr-1" /> 新增标签
           </Button>
         </div>

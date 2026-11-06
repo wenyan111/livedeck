@@ -4,6 +4,16 @@ import type { IpcChannels } from 'shared/electron-api'
 
 class WindowManager {
   private mainWindow?: BrowserWindow
+  /** 用户已确认关闭 / 自动更新要重启安装：跳过「关闭确认」弹窗 */
+  private forceQuit = false
+
+  markForceQuit() {
+    this.forceQuit = true
+  }
+
+  get isForceQuit() {
+    return this.forceQuit
+  }
 
   setMainWindow(win: BrowserWindow) {
     this.mainWindow = win

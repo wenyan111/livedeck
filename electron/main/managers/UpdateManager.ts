@@ -243,6 +243,7 @@ class UpdateManager {
 
   public async quitAndInstall() {
     logger.info('准备退出并安装更新')
+    windowManager.markForceQuit()
     this.updater.quitAndInstall()
   }
 }
@@ -360,6 +361,7 @@ class WindowsUpdater implements Updater {
     if (existsSync(this.savePath)) {
       await shell.openPath(this.savePath)
       await sleep(3000)
+      windowManager.markForceQuit()
       app.quit()
     } else {
       logger.error(`下载文件 ${this.savePath} 不存在`)
@@ -507,6 +509,7 @@ class MacOSUpdater implements Updater {
       await shell.openPath(this.savePath)
       // 等待一会后退出应用
       await sleep(3000)
+      windowManager.markForceQuit()
       app.quit()
     } else {
       logger.error(`下载文件 ${this.savePath} 不存在`)
