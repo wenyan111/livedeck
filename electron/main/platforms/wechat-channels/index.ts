@@ -304,6 +304,9 @@ export class WechatChannelPlatform
       page.waitForURL(REGEXPS.INDEX_PAGE, { timeout: 0 }),
       page.waitForFunction(
         () => {
+          // 中控台还在（有评论输入框）就绝不算「已结束」——页面里可能残留历史文案，
+          // 误判会把人好好的直播连接直接掐掉
+          if (document.querySelector('.live-message-input-container')) return false
           const text = (document.body?.textContent ?? '').replace(/\s+/g, '')
           return text.includes('本场直播已结束') || text.includes('因违反《微信视频号直播')
         },
@@ -313,6 +316,7 @@ export class WechatChannelPlatform
 
     // 平台判定违规/断流后结束的这场直播：救不回来，必须让人重新开播
     const endedByPlatform = await page.evaluate(() => {
+      if (document.querySelector('.live-message-input-container')) return false
       const text = (document.body?.textContent ?? '').replace(/\s+/g, '')
       return text.includes('本场直播已结束') || text.includes('因违反《微信视频号直播')
     })

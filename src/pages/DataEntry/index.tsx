@@ -51,8 +51,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { getEffectiveModel, getSavedModels, useAIProvider } from '@/hooks/useAIProvider'
+import { getEffectiveModel, useAIProvider, VOLC_PRESET_MODELS } from '@/hooks/useAIProvider'
 import { useToast } from '@/hooks/useToast'
+
+/** 方舟三个常用型号的显示名（快捷填按钮上用的） */
+const VOLC_MODEL_LABELS: Record<string, string> = {
+  'doubao-seed-2-1-pro-260915': 'Seed 2.1 pro',
+  'doubao-seed-2-1-turbo-260628': 'Seed 2.1 turbo',
+  'doubao-seed-2-0-lite-260428': 'Seed 2.0 lite',
+}
 
 /** 规则框最大高度：到顶后内部滚动，别把列表撑满整屏 */
 const RULE_BOX_MAX_HEIGHT = 120
@@ -919,18 +926,8 @@ function ColumnManagerModal({
 
 export default function DataEntry() {
   const { toast } = useToast()
-  const {
-    config,
-    apiKeys,
-    customBaseURL,
-    setConfig,
-    setApiKey,
-    setCustomBaseURL,
-    setModelValue,
-    addSavedModel,
-    updateSavedModel,
-    removeSavedModel,
-  } = useAIProvider('vision')
+  const { config, apiKeys, customBaseURL, setConfig, setApiKey, setCustomBaseURL, setModelValue } =
+    useAIProvider('vision')
 
   /**
    * 页面视图：分板块录入 / 总表。
@@ -956,8 +953,6 @@ export default function DataEntry() {
    * 2026-11-06 起不再有「模型 ID / 接入点」两种模式，只有一份可自建的备用列表。
    */
   const effectiveModel = getEffectiveModel(config)
-  /** 当前服务商名下攒的备用模型（点一下就切过去） */
-  const savedModels = getSavedModels(config)
   /**
    * 截图多选：按板块记选中的图片 id。
    * 用来「挑几张一起重认」（单张 hover 的「重认」只能一张一张点，用户 2026-11-05 反馈要能多张）。
@@ -2708,63 +2703,39 @@ export default function DataEntry() {
               </Select>
             ) : (
               <div className="space-y-1.5">
-                {/* 模型清单：一行一个模型（模型 ID 或方舟接入点 ep 都行），
-                    每行最前面一个「切换」按钮，点一下立即用它；底部「新增」再添一条。
-                    2026-11-06 用户要求：不要「备用」按钮，改成点新增在下面加一条这样的。 */}
-                <div className="rule-scroll max-h-[136px] space-y-1 overflow-y-auto overscroll-contain pr-1">
-                  {savedModels.map((value, i) => {
-                    const active = value.trim() !== '' && value === config.model
-                    return (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: 模型清单是「一行一个输入框」，顺序就是它的身份
-                      <div key={`model-row-${i}`} className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setModelValue(value)
-                            toast.success('已切到这个模型')
-                          }}
-                          disabled={!value.trim() || active}
-                          className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-medium transition ${
-                            active
-                              ? 'bg-primary/20 text-primary'
-                              : value.trim()
-                                ? 'bg-muted text-muted-foreground hover:bg-primary/15 hover:text-primary'
-                                : 'bg-muted/40 text-muted-foreground/50'
-                          }`}
-                          title={active ? '当前正在用这个模型' : '切到这个模型'}
-                        >
-                          {active ? '当前' : '切换'}
-                        </button>
-                        <Input
-                          value={value}
-                          onChange={e => updateSavedModel(i, e.target.value)}
-                          placeholder={
-                            config.provider === 'volcengine'
-                              ? 'doubao-seed-2-1-turbo-260628 或 ep-2026...'
-                              : '如 glm-4v-plus'
-                          }
-                          className="h-8 text-xs"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeSavedModel(i)}
-                          className="shrink-0 rounded p-1 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive"
-                          title="删掉这一条（不影响当前在用的）"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-[11px]"
-                  onClick={addSavedModel}
-                >
-                  <Plus className="w-3 h-3 mr-1" /> 新增
-                </Button>
+                {/* 回到最原始的填法：一个输入框，模型 ID 或方舟接入点 ep-xxxx 都直接填，
+                    下面三个按钮只是「一键填常用型号」，填完还能自己改（2026-11-06 用户要求） */}
+                <Input
+                  value={config.model}
+                  onChange={e => setModelValue(e.target.value)}
+                  placeholder={
+                    config.provider === 'volcengine'
+                      ? 'doubao-seed-2-1-turbo-260628 或 ep-2026...'
+                      : '如 glm-4v-plus'
+                  }
+                />
+                {config.provider === 'volcengine' && (
+                  <div className="flex flex-wrap gap-1">
+                    {VOLC_PRESET_MODELS.map(id => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          setModelValue(id)
+                          toast.success(`已填入 ${VOLC_MODEL_LABELS[id] ?? id}，可以自己改`)
+                        }}
+                        className={`rounded border px-1.5 py-0.5 text-[10px] transition ${
+                          config.model === id
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border text-muted-foreground hover:border-primary/50'
+                        }`}
+                        title={id}
+                      >
+                        {VOLC_MODEL_LABELS[id] ?? id}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
