@@ -1559,6 +1559,30 @@ export default function DataEntry() {
     })
   }, [sectionPlatforms, columns])
 
+  /**
+   * 清掉多余的「空行」：每个板块只保留一行（有数据的行一律不动）。
+   * 这些空行是今天早些时候点「新增一行」留下的，按钮删了但数据还在 dataEntryState.json 里，
+   * 重启也不会自己消失（用户 2026-11-06：「都没有一个板块填多个的功能了，怎么蹦出来这么多」）。
+   */
+  useEffect(() => {
+    setRows(prev => {
+      const bySection = new Map<string, DataRow[]>()
+      for (const row of prev) {
+        const key = String(row.platform ?? '')
+        const list = bySection.get(key)
+        if (list) list.push(row)
+        else bySection.set(key, [row])
+      }
+      const kept: DataRow[] = []
+      for (const list of bySection.values()) {
+        const withData = list.filter(row => hasAnyValue(row.values))
+        // 有数据的留着（不丢数据）；全空的话只留第一条
+        kept.push(...(withData.length > 0 ? withData : [list[0]]))
+      }
+      return kept.length === prev.length ? prev : kept
+    })
+  }, [])
+
   /** 当前选中行失效（被删 / 换板块 / 刚补了行）时自动选第一行，否则识别没地方写 */
   useEffect(() => {
     if (rows.length === 0) return
