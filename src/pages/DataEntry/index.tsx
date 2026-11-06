@@ -154,7 +154,7 @@ interface DataRow {
  * 之前直接用 platformLabels[sectionKey] 会把巨量百应写成「抖音小店」，
  * 与日报里的「抖音 / 视频号 / 小红书 / 淘宝 / 快手」对不上（2026-11-05 用户指出「这里不对」）。
  */
-const PLATFORM_GROUP_LABELS: Record<string, string> = {
+const _PLATFORM_GROUP_LABELS: Record<string, string> = {
   douyin: '抖音',
   buyin: '抖音',
   eos: '抖音',
@@ -1687,8 +1687,11 @@ export default function DataEntry() {
         columns: cols,
         rows: rowsBySection.get(key) ?? [],
       }))
-      // 一列字段都没有的板块不建表
-      .filter(sheet => sheet.columns.some(c => String(c.label ?? '').trim() !== ''))
+      // 只给「有数据 + 有字段」的板块建表
+      .filter(
+        sheet =>
+          sheet.rows.length > 0 && sheet.columns.some(c => String(c.label ?? '').trim() !== ''),
+      )
     return {
       sheets,
       totalRows: sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0),
@@ -1823,24 +1826,9 @@ export default function DataEntry() {
    * 总表变了就自动写文件（防抖 900ms，避免连续敲字时反复写盘）。
    * 关着的时候只是空转，不产生任何 IO。
    */
-  const initialSyncDoneRef = useRef(false)
-  useEffect(() => {
-    if (!ledgerSync.enabled || !ledgerSync.filePath) {
-      initialSyncDoneRef.current = false
-      return
-    }
-    // 刚打开软件 / 刚开启同步时先立刻写一次：否则改完字段或升级版本后，
-    // 只要总表数据没变，外部 xlsx 就一直停在旧内容（用户 2026-11-06 反馈）
-    if (!initialSyncDoneRef.current) {
-      initialSyncDoneRef.current = true
-      void writeLedgerSync(ledgerSync.filePath)
-      return
-    }
-    const timer = setTimeout(() => {
-      void writeLedgerSync(ledgerSync.filePath)
-    }, 900)
-    return () => clearTimeout(timer)
-  }, [ledgerSync.enabled, ledgerSync.filePath, writeLedgerSync])
+  // 自动同步已经挪到主进程（LedgerAutoSyncService）：字段一改、总表一变就写，
+  // 而且开软件 2 秒后补写一次，不依赖本页面是否打开。
+  // 这里只保留手动的「同步到总表」按钮（点击时立刻写一次并提示结果）。
 
   /** 校准模板：用该平台的第一张截图 + 该平台当前行数据作为已知值 */
   const handleCalibrate = useCallback(
