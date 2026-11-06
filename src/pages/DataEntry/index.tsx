@@ -2,6 +2,7 @@ import type { VisionTemplate } from 'electron/main/services/VisionRecognizer'
 import {
   ChevronDown,
   ChevronUp,
+  Copy,
   Eye,
   EyeOff,
   FileSpreadsheet,
@@ -772,6 +773,8 @@ function RowCard({
 function ColumnManagerModal({
   columns,
   platform,
+  allColumns,
+  labelOf,
   onCancel,
   onSave,
 }: {
@@ -779,6 +782,10 @@ function ColumnManagerModal({
   columns: LiveReportColumn[]
   /** 当前正在编辑哪个板块（新增/导入的列归到这个板块） */
   platform: LiveControlPlatform
+  /** 全部板块的字段，用于「从其它板块导入字段」 */
+  allColumns: LiveReportColumn[]
+  /** 板块 key → 显示名（自定义板块名只有页面知道） */
+  labelOf: (key: string) => string
   onCancel: () => void
   onSave: (cols: LiveReportColumn[]) => void
 }) {
@@ -824,6 +831,33 @@ function ColumnManagerModal({
       return next
     })
   }, [])
+
+  /** 可导入来源：其它板块里已有的字段（板块 key → 数量） */
+  const importSources = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const c of allColumns) {
+      const key = String(c.platform ?? '')
+      if (!key || key === (platform as string)) continue
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return [...map.entries()]
+  }, [allColumns, platform])
+
+  /** 把某个板块的字段整套复制过来（同 key / 同名的跳过） */
+  const importFrom = (src: string) => {
+    const existingKeys = new Set(draft.map(c => c.key))
+    const existingLabels = new Set(draft.map(c => c.label.trim()))
+    const added = allColumns
+      .filter(c => String(c.platform ?? '') === src)
+      .filter(c => !existingKeys.has(c.key) && !existingLabels.has(c.label.trim()))
+      .map(c => ({ ...c, platform }))
+    if (added.length === 0) {
+      toast.error('没有可导入的新字段（已经有了）')
+      return
+    }
+    setDraft(prev => [...prev, ...added])
+    toast.success(`已导入 ${added.length} 个字段，记得点「保存」`)
+  }
 
   const update = (idx: number, patch: Partial<LiveReportColumn>) =>
     setDraft(prev => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)))
@@ -915,6 +949,18 @@ function ColumnManagerModal({
             >
               <Upload className="w-3 h-3 mr-1" /> 从文件导入
             </Button>
+            {importSources.map(([src, count]) => (
+              <Button
+                key={src}
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => importFrom(src)}
+                title={`把「${labelOf(src)}」的 ${count} 个字段复制到本板块`}
+              >
+                <Copy className="w-3 h-3 mr-1" /> 导入「{labelOf(src)}」{count}
+              </Button>
+            ))}
             <span className="flex-1" />
             {/* 字段太多时一个个点垃圾桶太慢：勾选后一次删掉，或一键清空（用户 2026-11-06） */}
             <Button
@@ -1395,7 +1441,16 @@ export default function DataEntry() {
    * 这些规则本质是「怎么填」的通用要求（百分比带 %、¥ 不带、时间段格式…），
    * 所以统一合并成一份全局规则（key = __all__），任何板块都显示、都生效（2026-11-06 用户反馈后改）。
    */
-  const globalNotes = sectionNotes.__all__ ?? []
+  const globalNotes = useMemo(() => {
+    const out = [...(sectionNotes.__all__ ?? [])]
+    for (const [key, list] of Object.entries(sectionNotes)) {
+      if (key === '__all__') continue
+      for (const rule of list ?? []) {
+        if (rule.trim() && !out.includes(rule)) out.push(rule)
+      }
+    }
+    return out
+  }, [sectionNotes])
   useEffect(() => {
     setSectionNotes(prev => {
       const keys = Object.keys(prev).filter(k => k !== '__all__')
@@ -1411,6 +1466,44 @@ export default function DataEntry() {
       return next
     })
   }, [persistNotes])
+
+  /**
+   * 兜底救援：如果 localStorage 读出来是空的（曾经出现过读不到的情况），
+   * 就把用户之前写过的这批规则重新写回一份，避免「规则凭空消失」。
+   * 只补一次（用 rescue_v1 标记），之后用户自己删空不会再被塞回来。
+   */
+  useEffect(() => {
+    const RESCUE_RULES = [
+      '观看核心城市、成交核心城市只填排第一的那一个，不要带具体占比、不要顿号连写',
+      '所有百分比字段都要带上 % 号',
+      '直播时长写成「2小时05分」这种，不要写小数',
+      '时间写成「10:40-13:08」这种具体时间段',
+      '十点之后开始的是午场或下午场，请自行判断场次',
+      '主品填：VD FIT全燃美塑仪EMS腰带',
+      '服装颜色填：上衣斜肩无袖抹胸背心不规则包臀半身裙',
+      '¥符号不要带、,号也不要带',
+      'GMV下面的万不是单位，不要带',
+    ]
+    if (localStorage.getItem('data-entry-notes-rescued') === '1') return
+    const raw = localStorage.getItem('data-entry-section-notes')
+    const hasContent = (() => {
+      try {
+        const parsed = raw ? JSON.parse(raw) : null
+        if (!parsed || typeof parsed !== 'object') return false
+        return Object.values(parsed as Record<string, unknown>).some(
+          list => Array.isArray(list) && list.length > 0,
+        )
+      } catch {
+        return false
+      }
+    })()
+    localStorage.setItem('data-entry-notes-rescued', '1')
+    if (hasContent) return
+    const next = { __all__: RESCUE_RULES }
+    localStorage.setItem('data-entry-section-notes', JSON.stringify(next))
+    setSectionNotes(next)
+    toast.success('已把你的 9 条填写规则恢复回来')
+  }, [toast])
 
   /** 一键清空某个板块这一行的全部字段值（截图不动） */
   const clearSectionValues = useCallback(
@@ -1732,7 +1825,7 @@ export default function DataEntry() {
           templateId: template ? 'use-saved' : undefined, // 有模板时使用位置引导
           runId, // 暂停时按这个 id 找到本次任务
           // 空规则（刚点「添加一条」还没写）不发给模型
-          extraInstructions: (sectionNotes.__all__ ?? []).map(n => n.trim()).filter(Boolean),
+          extraInstructions: globalNotes.map(n => n.trim()).filter(Boolean),
         })
         // 这次识别真正写进来的字段（非空、且与旧值不同）→ 高光 5 秒。
         // 之前只有「低置信度」黄框，识别干净时一个提示都没有，用户看不出改了哪些格子。
@@ -1822,7 +1915,7 @@ export default function DataEntry() {
       template,
       sectionLabel,
       setImagesOf,
-      sectionNotes,
+      globalNotes,
     ],
   )
 
@@ -3002,6 +3095,8 @@ export default function DataEntry() {
         <ColumnManagerModal
           columns={columns.filter(c => c.platform === columnModalPlatform)}
           platform={columnModalPlatform}
+          allColumns={columns}
+          labelOf={sectionLabel}
           onCancel={() => setColumnModalOpen(false)}
           onSave={handleSaveColumns}
         />
