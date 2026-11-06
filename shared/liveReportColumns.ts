@@ -324,6 +324,21 @@ export function computeDerivedValues(
   return out
 }
 
+/**
+ * 「自动计算」字段的公式说明（纯展示用）。
+ * 这些值是本地算的，跟 AI 无关：识别/手填完立刻用已有字段算出来。
+ */
+export const COMPUTED_RULES: Record<string, string> = {
+  uvValue: '支付GMV ÷ 观看人数',
+  joinGroupRate: '新加直播团人数 ÷ 观看人数 × 100%',
+  avgCommentsPerMin: '评论次数 ÷ 直播时长（分钟）',
+  roi: '支付GMV ÷ 投放金额',
+}
+
+/** 取某个自动计算字段的公式说明（不是计算列就返回 undefined） */
+export const computedRuleOf = (key: string, source?: string) =>
+  source === 'computed' ? COMPUTED_RULES[key] : undefined
+
 /** 返回一份全新的默认列定义副本（用于「恢复默认」，避免改动常量本身） */
 export function getDefaultColumns(): LiveReportColumn[] {
   return LIVE_REPORT_COLUMNS.map(c => ({ ...c }))

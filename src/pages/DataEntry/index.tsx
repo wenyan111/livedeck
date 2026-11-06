@@ -30,6 +30,7 @@ import type { LedgerSyncConfig } from 'shared/ledgerSync'
 import {
   COMPUTED_DEPENDENCY_KEYS,
   computeDerivedValues,
+  computedRuleOf,
   generateColumnKey,
   getDefaultColumns,
   LIVE_REPORT_COLUMNS,
@@ -911,7 +912,7 @@ function ColumnManagerModal({
                 value={col.source}
                 onValueChange={s => update(idx, { source: s as LiveReportColumn['source'] })}
               >
-                <SelectTrigger className="h-8 text-xs">
+                <SelectTrigger className="h-8 text-xs" title={computedRuleOf(col.key, col.source)}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
