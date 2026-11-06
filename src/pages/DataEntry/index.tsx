@@ -607,24 +607,19 @@ function CropModal({
 /** 单行数据编辑卡片 */
 function RowCard({
   row,
-  rowIndex,
   isActive,
   columns,
-  onSelect,
   onUpdateValues,
   flashKeys = [],
 }: {
   row: DataRow
-  rowIndex: number
-  rowCount: number
   isActive: boolean
   columns: LiveReportColumn[]
-  onSelect: () => void
   onUpdateValues: (rowId: string, key: string, val: string) => void
   /** 本次识别刚写入、需要高光的字段 key */
   flashKeys?: string[]
 }) {
-  const [expanded, setExpanded] = useState(rowIndex === 0)
+  const [expanded, setExpanded] = useState(true)
 
   const groups = useMemo(() => {
     const map = new Map<string, LiveReportColumn[]>()
@@ -655,20 +650,6 @@ function RowCard({
           }
         }}
       >
-        <button
-          type="button"
-          onClick={e => {
-            e.stopPropagation()
-            onSelect()
-          }}
-          className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs font-bold shrink-0 ${
-            isActive
-              ? 'border-primary bg-primary text-white'
-              : 'border-muted-foreground/30 text-muted-foreground'
-          }`}
-        >
-          {rowIndex + 1}
-        </button>
         {/* 行头直接可填：日期 / 主播 / 场次（原来是一串拼接文字，
             「第${session}场」还会拼出「第早场场」，用户 2026-11-05 反馈 */}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: 这里只为阻止冒泡，没有可点击行为 */}
@@ -1560,28 +1541,25 @@ export default function DataEntry() {
   }, [sectionPlatforms, columns])
 
   /**
-   * 清掉多余的「空行」：每个板块只保留一行（有数据的行一律不动）。
-   * 这些空行是今天早些时候点「新增一行」留下的，按钮删了但数据还在 dataEntryState.json 里，
-   * 重启也不会自己消失（用户 2026-11-06：「都没有一个板块填多个的功能了，怎么蹦出来这么多」）。
+   * 每个板块**有且只有一行**：存档里早先点「新增一行」留下的空行要清掉。
+   * 注意必须等存档异步载入之后再跑，否则跑在默认状态上等于没跑（用户 2026-11-06 反馈「还在」）。
+   * 同一板块有多行时，保留「填得最多」的那一条，绝不丢数据。
    */
   useEffect(() => {
+    if (!loadedRef.current || rows.length === 0) return
     setRows(prev => {
-      const bySection = new Map<string, DataRow[]>()
+      const bySection = new Map<string, DataRow>()
+      const filled = (row: DataRow) =>
+        Object.values(row.values).filter(v => String(v ?? '').trim() !== '').length
       for (const row of prev) {
         const key = String(row.platform ?? '')
-        const list = bySection.get(key)
-        if (list) list.push(row)
-        else bySection.set(key, [row])
+        const existing = bySection.get(key)
+        if (!existing || filled(row) > filled(existing)) bySection.set(key, row)
       }
-      const kept: DataRow[] = []
-      for (const list of bySection.values()) {
-        const withData = list.filter(row => hasAnyValue(row.values))
-        // 有数据的留着（不丢数据）；全空的话只留第一条
-        kept.push(...(withData.length > 0 ? withData : [list[0]]))
-      }
-      return kept.length === prev.length ? prev : kept
+      const kept = [...bySection.values()]
+      return kept.length === prev.length && kept.every((r, i) => r === prev[i]) ? prev : kept
     })
-  }, [])
+  }, [rows])
 
   /** 当前选中行失效（被删 / 换板块 / 刚补了行）时自动选第一行，否则识别没地方写 */
   useEffect(() => {
@@ -2806,15 +2784,12 @@ export default function DataEntry() {
                   </p>
                 ) : (
                   <div className="space-y-2.5">
-                    {pfRows.map((row, idx) => (
+                    {pfRows.map(row => (
                       <RowCard
                         key={row.id}
                         row={row}
-                        rowIndex={idx}
-                        rowCount={pfRows.length}
                         isActive={row.id === activeRowId}
                         columns={pfColumns}
-                        onSelect={() => setActiveRowId(row.id)}
                         onUpdateValues={updateCellValue}
                         flashKeys={flash?.rowId === row.id ? flash.keys : []}
                       />
