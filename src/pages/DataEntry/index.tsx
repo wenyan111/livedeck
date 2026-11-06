@@ -97,7 +97,7 @@ function RuleTextarea({ value, onChange }: { value: string; onChange: (v: string
       rows={1}
       placeholder="在这里写规则，改完立即生效"
       title="可以直接改这条规则，改完自动保存；一条里换行写多条也可以"
-      className="min-w-0 flex-1 resize-none overflow-y-auto rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-snug text-foreground/85 outline-none hover:border-border focus:border-primary focus:bg-background"
+      className="min-w-0 flex-1 resize-none overflow-y-auto rounded border border-transparent bg-transparent px-1 py-0.5 text-[12px] leading-relaxed text-foreground/85 outline-none hover:border-border focus:border-primary focus:bg-background"
     />
   )
 }
@@ -131,7 +131,7 @@ function RuleComposer({
       rows={1}
       placeholder="写规则，回车加上 · Shift+回车换行（多条规则也能写在一条里）"
       title="回车加上这条规则；Shift+回车换行，可以把所有规则写在同一条里"
-      className="min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-input bg-background px-2 py-1 text-[11px] leading-5 outline-none placeholder:text-muted-foreground focus:border-primary"
+      className="min-h-7 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-input bg-background px-2 py-0.5 text-[12px] leading-6 outline-none placeholder:text-muted-foreground focus:border-primary"
     />
   )
 }
@@ -1012,17 +1012,6 @@ export default function DataEntry() {
         if (index < 0 || index >= list.length) return prev
         list[index] = text
         const next = { ...prev, [key]: list }
-        persistNotes(next)
-        return next
-      })
-    },
-    [persistNotes],
-  )
-  /** 点「+ 添加一条」直接在列表里开一条空规则，当场就能写 */
-  const addBlankNote = useCallback(
-    (key: string) => {
-      setSectionNotes(prev => {
-        const next = { ...prev, [key]: [...(prev[key] ?? []), ''] }
         persistNotes(next)
         return next
       })
@@ -2071,9 +2060,10 @@ export default function DataEntry() {
                 {/* 调教区：所有「怎么填」的规则都直接写在这里，随时可改可加可删。
                     用多行文本框而不是单行 input —— 长中文规则在单行里会被横向截断（用户 2026-11-06 反馈「好多规则看不到」）。 */}
                 <div className="rounded-lg border bg-muted/30 px-2.5 py-2">
-                  <div className="flex items-start gap-2">
-                    <MessageSquarePlus className="mt-1.5 w-3.5 h-3.5 shrink-0 text-primary" />
-                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-muted-foreground">
+                  {/* 第一行：图标 / 标题 / 输入框 / 按钮 统一 items-center 垂直居中对齐 */}
+                  <div className="flex items-center gap-2">
+                    <MessageSquarePlus className="w-3.5 h-3.5 shrink-0 text-primary" />
+                    <span className="shrink-0 text-[12px] font-medium text-muted-foreground">
                       填写规则
                     </span>
                     <RuleComposer
@@ -2084,7 +2074,7 @@ export default function DataEntry() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-7 px-2 text-[11px]"
+                      className="h-7 shrink-0 px-2 text-[11px]"
                       onClick={() => addSectionNote(pf)}
                       disabled={!(noteDraft[pf] ?? '').trim()}
                     >
@@ -2093,24 +2083,24 @@ export default function DataEntry() {
                     </Button>
                   </div>
 
-                  {/* 规则列表：一条一行、随内容长高。常用模板和「已写 N 条」提示已按用户要求删掉，
-                      空规则不会发给模型 */}
+                  {/* 规则列表：一条一行、随内容长高。常用模板、「已写 N 条」提示、
+                      底部重复的「添加一条」都已按用户要求删掉；空规则不会发给模型 */}
                   {(sectionNotes[pf] ?? []).length > 0 && (
                     <div className="mt-1 max-h-56 space-y-0.5 overflow-y-auto pr-1">
                       {(sectionNotes[pf] ?? []).map((note, i) => (
                         <div
                           // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
                           key={`${pf}-note-${i}`}
-                          className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-0.5 text-[11px]"
+                          className="group flex items-start gap-1.5 rounded bg-background/70 px-1.5 py-0.5"
                         >
-                          <span className="mt-px shrink-0 rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+                          <span className="mt-1 shrink-0 rounded bg-primary/15 px-1 text-[10px] font-medium leading-4 text-primary">
                             {i + 1}
                           </span>
                           <RuleTextarea value={note} onChange={v => updateSectionNote(pf, i, v)} />
                           <button
                             type="button"
                             onClick={() => removeSectionNote(pf, i)}
-                            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                            className="mt-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                             title="删掉这条规则"
                           >
                             <X className="w-3 h-3" />
@@ -2119,17 +2109,6 @@ export default function DataEntry() {
                       ))}
                     </div>
                   )}
-
-                  <div className="mt-1 flex justify-end">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1.5 text-[10px]"
-                      onClick={() => addBlankNote(pf)}
-                    >
-                      <Plus className="w-3 h-3 mr-0.5" /> 添加一条
-                    </Button>
-                  </div>
                 </div>
 
                 {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖拽放置区，键盘不适用 */}
