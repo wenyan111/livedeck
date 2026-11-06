@@ -28,6 +28,12 @@ export interface LiveReportColumn {
    *  computed 自动计算
    */
   source: 'manual' | 'vision' | 'ai' | 'fixed' | 'skip' | 'computed'
+  /**
+   * 仅 source === 'computed' 用：用户自己写的计算式。
+   * 用 [字段名] 引用其它字段，例如 `[支付GMV] / [观看人数]`、`[新加直播团人数] / [观看人数] * 100`。
+   * 支持 + - * / ( ) 和小数。留空则回落到内置公式（UV价值/加团率/平均评论/ROI）。
+   */
+  formula?: string
   /** UI 分组 */
   group: string
   /**
@@ -321,6 +327,16 @@ export function computeDerivedValues(
   if (fansGroup !== null && viewers !== null && viewers !== 0) {
     out['joinGroupRate'] = String(+((fansGroup / viewers) * 100).toFixed(digitsOf('joinGroupRate')))
   }
+
+  // 用户自己在「管理列」里写的公式优先：算得出来就覆盖内置结果
+  for (const col of columns) {
+    if (col.source !== 'computed') continue
+    const expr = String(col.formula ?? '').trim()
+    if (!expr) continue
+    const value = evaluateFormula(expr, raw, columns)
+    if (value === null) continue
+    out[col.key] = String(+value.toFixed(col.decimals ?? 2))
+  }
   return out
 }
 
@@ -338,6 +354,166 @@ export const COMPUTED_RULES: Record<string, string> = {
 /** 取某个自动计算字段的公式说明（不是计算列就返回 undefined） */
 export const computedRuleOf = (key: string, source?: string) =>
   source === 'computed' ? COMPUTED_RULES[key] : undefined
+
+/**
+ * 极简公式求值：只支持 数字、[字段名] 引用、+ - * / ( ) 和一元负号。
+ * 不用 eval：① 安全 ② 不会被 Vite 打包成动态代码。
+ * 引用不到或数字解析失败 → 返回 null（这一格就不填，留空好过填错）。
+ */
+export function evaluateFormula(
+  expr: string,
+  raw: Record<string, string>,
+  columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS,
+): number | null {
+  const text = String(expr ?? '').trim()
+  if (!text) return null
+
+  // ① 词法分析
+  type Token = { kind: 'num'; value: number } | { kind: 'op'; value: string }
+  const tokens: Token[] = []
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (/\s/.test(ch)) {
+      i++
+      continue
+    }
+    if (ch === '[') {
+      const end = text.indexOf(']', i + 1)
+      if (end < 0) return null
+      const ref = text.slice(i + 1, end).trim()
+      // 引用可以写字段名、字段 key，也允许省略单位后缀：
+      // 「[观看人数]」应该能对上「观看人数（w）」，否则用户得一字不差地抄。
+      const norm = (t: string) =>
+        t
+          .replace(/[（(][^）)]*[）)]/g, '')
+          .replace(/\s+/g, '')
+          .toLowerCase()
+      const col =
+        columns.find(c => c.label.trim() === ref) ??
+        columns.find(c => c.key === ref) ??
+        columns.find(c => norm(c.label) === norm(ref)) ??
+        columns.find(c => c.key.toLowerCase() === ref.toLowerCase())
+      if (!col) return null
+      const n = actualCount(raw, col.key, columns)
+      if (n === null) return null
+      tokens.push({ kind: 'num', value: n })
+      i = end + 1
+      continue
+    }
+    if (/[0-9.]/.test(ch)) {
+      let j = i
+      while (j < text.length && /[0-9.]/.test(text[j])) j++
+      const n = Number(text.slice(i, j))
+      if (!Number.isFinite(n)) return null
+      tokens.push({ kind: 'num', value: n })
+      i = j
+      continue
+    }
+    if ('+-*/()'.includes(ch)) {
+      tokens.push({ kind: 'op', value: ch })
+      i++
+      continue
+    }
+    // 出现不认识的字符（中文、字母）→ 直接放弃，避免算错
+    return null
+  }
+  if (tokens.length === 0) return null
+
+  // ② 调度场算法 → 后缀表达式
+  const prec: Record<string, number> = { '+': 1, '-': 1, '*': 2, '/': 2 }
+  const output: Token[] = []
+  const ops: string[] = []
+  let prev: Token | undefined
+  for (const token of tokens) {
+    if (token.kind === 'num') {
+      output.push(token)
+    } else if (token.value === '(') {
+      ops.push('(')
+    } else if (token.value === ')') {
+      while (ops.length > 0 && ops[ops.length - 1] !== '(') {
+        output.push({ kind: 'op', value: ops.pop() as string })
+      }
+      if (ops.pop() !== '(') return null
+    } else {
+      // 一元负号：开头或跟在运算符/左括号后面
+      const unary = token.value === '-' && (!prev || (prev.kind === 'op' && prev.value !== ')'))
+      if (unary) {
+        output.push({ kind: 'num', value: 0 })
+      }
+      const op = token.value
+      while (
+        ops.length > 0 &&
+        ops[ops.length - 1] !== '(' &&
+        prec[ops[ops.length - 1]] >= prec[op]
+      ) {
+        output.push({ kind: 'op', value: ops.pop() as string })
+      }
+      ops.push(op)
+    }
+    prev = token
+  }
+  while (ops.length > 0) {
+    const op = ops.pop() as string
+    if (op === '(') return null
+    output.push({ kind: 'op', value: op })
+  }
+
+  // ③ 求值
+  const stack: number[] = []
+  for (const token of output) {
+    if (token.kind === 'num') {
+      stack.push(token.value)
+      continue
+    }
+    const b = stack.pop()
+    const a = stack.pop()
+    if (a === undefined || b === undefined) return null
+    switch (token.value) {
+      case '+':
+        stack.push(a + b)
+        break
+      case '-':
+        stack.push(a - b)
+        break
+      case '*':
+        stack.push(a * b)
+        break
+      case '/':
+        if (b === 0) return null
+        stack.push(a / b)
+        break
+      default:
+        return null
+    }
+  }
+  if (stack.length !== 1) return null
+  const result = stack[0]
+  return Number.isFinite(result) ? result : null
+}
+
+/** 公式里引用不到的字段名（给「管理列」做输入校验用） */
+export function unknownRefsOf(
+  expr: string,
+  columns: LiveReportColumn[] = LIVE_REPORT_COLUMNS,
+): string[] {
+  const norm = (t: string) =>
+    t
+      .replace(/[（(][^）)]*[）)]/g, '')
+      .replace(/\s+/g, '')
+      .toLowerCase()
+  const bad: string[] = []
+  for (const m of String(expr ?? '').matchAll(/\[([^\]]+)\]/g)) {
+    const ref = m[1].trim()
+    const hit =
+      columns.some(c => c.label.trim() === ref) ||
+      columns.some(c => c.key === ref) ||
+      columns.some(c => norm(c.label) === norm(ref)) ||
+      columns.some(c => c.key.toLowerCase() === ref.toLowerCase())
+    if (!hit) bad.push(ref)
+  }
+  return bad
+}
 
 /** 返回一份全新的默认列定义副本（用于「恢复默认」，避免改动常量本身） */
 export function getDefaultColumns(): LiveReportColumn[] {

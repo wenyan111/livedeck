@@ -37,6 +37,7 @@ import {
   type LiveReportColumn,
   parseDurationHours,
   roundByColumn,
+  unknownRefsOf,
 } from 'shared/liveReportColumns'
 import { providers } from 'shared/providers'
 import { platformLabels } from '@/abilities'
@@ -958,6 +959,31 @@ function ColumnManagerModal({
               >
                 <Trash2 className="w-4 h-4" />
               </button>
+
+              {/* 自动计算字段：让用户自己写公式，不用每次找开发改代码。
+                  用 [字段名] 引用其它字段，例如 [支付GMV] / [观看人数] * 100 */}
+              {col.source === 'computed' && (
+                <div className="col-span-full flex items-center gap-2 pb-1 pl-9">
+                  <span className="shrink-0 text-[10px] text-muted-foreground">公式</span>
+                  <Input
+                    value={col.formula ?? ''}
+                    onChange={e => update(idx, { formula: e.target.value })}
+                    placeholder={
+                      computedRuleOf(col.key, col.source)
+                        ? `内置：${computedRuleOf(col.key, col.source)}（想自己算就写在这里，会覆盖内置）`
+                        : '例：[支付GMV] / [观看人数] * 100'
+                    }
+                    className="h-7 flex-1 font-mono text-[11px]"
+                    title="用 [字段名] 引用其它字段，支持 + - * / ( )。留空就用内置公式"
+                  />
+                  {/* 引用写错（字段改名/打错字）时当场提示，别等算了才发现是空的 */}
+                  {unknownRefsOf(col.formula ?? '', draft).length > 0 && (
+                    <span className="shrink-0 text-[10px] text-destructive">
+                      引用不到：{unknownRefsOf(col.formula ?? '', draft).join('、')}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           <Button variant="outline" size="sm" onClick={add} className="mt-1">
