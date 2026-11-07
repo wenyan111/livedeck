@@ -553,3 +553,15 @@ export function generateColumnKey(existing: LiveReportColumn[]): string {
   }
   return key
 }
+
+/**
+ * 这个字段是否「本该是数字」——只有这类字段才需要做数值有效性 / 低置信度校验。
+ *
+ * AI 判断、人工填写、规则固定、文本单位的字段本来就是文字结论
+ * （早场 / 上海 / VD FIT 腰带…），拿去 parseFloat 必然 NaN，
+ * 会一直误报橙色「低置信度」框（用户 2026-11-07 发现「场次」被误标）。
+ * 主进程判定与页面渲染共用这一个函数，避免两处白名单不一致。
+ */
+export function expectsNumericValue(col: Pick<LiveReportColumn, 'source' | 'unit'>): boolean {
+  return col.source === 'vision' && col.unit !== 'text'
+}

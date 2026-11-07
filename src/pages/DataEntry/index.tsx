@@ -34,6 +34,7 @@ import {
   computeDerivedValues,
   computedRuleOf,
   convertColumnValue,
+  expectsNumericValue,
   generateColumnKey,
   getDefaultColumns,
   LIVE_REPORT_COLUMNS,
@@ -736,6 +737,25 @@ function RowCard({
       {/* 展开的字段网格 */}
       {expanded && (
         <div className="px-3 pb-2.5 space-y-2 border-t pt-2">
+          {/* 格子颜色图例：小字一行，省得每次猜橙框 / 绿底是什么意思（用户 2026-11-07） */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+            <span className="font-medium">格子颜色</span>
+            <span className="inline-flex items-center gap-1">
+              <i className="inline-block h-2.5 w-2.5 rounded-sm ring-1 ring-warning" /> 待核对
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="inline-block h-2.5 w-2.5 rounded-sm bg-success/25" /> 已识别
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="inline-block h-2.5 w-2.5 rounded-sm bg-destructive/25" /> 未填
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="inline-block h-2.5 w-2.5 rounded-sm bg-muted" /> 人工/留空/计算
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="inline-block h-2.5 w-2.5 rounded-sm bg-success" /> 刚写入
+            </span>
+          </div>
           {groups.map(([group, cols]) => (
             <div key={group}>
               <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -747,7 +767,9 @@ function RowCard({
                   const isManual = col.source === 'manual'
                   const isSkip = col.source === 'skip'
                   const isComputed = col.source === 'computed'
-                  const isLow = row.lowConfidence.includes(col.key)
+                  // 只有「本该是数字」的字段才画低置信度橙框；
+                  // 旧存档里误标的 session 等文字结论不会再显示（不改用户数据）
+                  const isLow = row.lowConfidence.includes(col.key) && expectsNumericValue(col)
                   const filled = val.trim() !== ''
                   const ring = flashKeys.includes(col.key)
                     ? 'ring-2 ring-success bg-success/25 shadow-[0_0_10px_rgba(34,197,94,0.55)] transition-all duration-500'
@@ -2401,7 +2423,9 @@ export default function DataEntry() {
           if (COMPUTED_DEPENDENCY_KEYS.includes(key)) {
             Object.assign(next, computeDerivedValues(next, columns))
           }
-          return { ...r, values: next }
+          // 人手动改过这个格子 = 已确认，去掉低置信度橙框
+          const lowConfidence = (r.lowConfidence ?? []).filter(k => k !== key)
+          return { ...r, values: next, lowConfidence }
         }),
       )
     },

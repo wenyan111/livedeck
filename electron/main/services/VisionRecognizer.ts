@@ -3,6 +3,7 @@ import path from 'node:path'
 import OpenAI from 'openai'
 import {
   computeDerivedValues,
+  expectsNumericValue,
   LIVE_REPORT_COLUMNS,
   type LiveReportColumn,
 } from 'shared/liveReportColumns'
@@ -617,7 +618,8 @@ export class VisionRecognizer {
             if (!mergedValues[col.key]) {
               mergedValues[col.key] = s
               matched++
-              if (col.unit !== 'text') {
+              // 只有「本该是数字」的字段才校验：AI 判断出来的「早场」等文字结论不该被误报
+              if (expectsNumericValue(col)) {
                 const num = Number.parseFloat(s.replace(/[^\d.-]/g, ''))
                 if (Number.isNaN(num)) allLowConfidence.push(col.key)
               }
