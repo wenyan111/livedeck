@@ -370,6 +370,45 @@ function sortLedgerDesc(records: LedgerRecord[]): LedgerRecord[] {
 }
 
 /** 把已有行的数据按新列定义重新对齐：保留仍存在的列值，丢掉已删列，新增列置空，并重算派生列 */
+/**
+ * 从「填写规则」里解析出「规则固定」字段的定值（用户 2026-11-07 要求）。
+ *
+ * 规则是全局一段文字，可能一条里换行写了好几条，所以先拆行、剥掉手写的序号。
+ * 只认「字段名（+可选动词）+ 冒号 + 值」这种明确给值的写法：
+ *   「主品：「VD FIT全燃美塑仪EMS腰带」」「主品填：VD FIT…」→ 解析出定值
+ *   「时间写成「10:40-13:08」这种具体时间段」→ 是格式说明，不当定值
+ * 这样「规则固定」就能区分：写了定值就直接填、不发给 AI；只写格式说明就仍走识别。
+ */
+function parseFixedValues(notes: string[], columns: LiveReportColumn[]): Record<string, string> {
+  const fixed = columns.filter(c => c.source === 'fixed')
+  if (fixed.length === 0 || notes.length === 0) return {}
+  const lines = notes
+    .flatMap(n => String(n).split(/\r?\n/))
+    .map(l => l.replace(/^\s*\d+[.、)]\s*/, '').trim())
+    .filter(Boolean)
+  const out: Record<string, string> = {}
+  for (const line of lines) {
+    for (const c of fixed) {
+      if (out[c.key]) continue
+      for (const name of [c.label, c.key]) {
+        if (!name || !line.startsWith(name)) continue
+        const rest = line.slice(name.length).trim()
+        const m = rest.match(/^(?:填写|填|设为|写成|为|是)?\s*[:：]\s*(.+)$/)
+        if (!m) continue
+        const v = m[1]
+          .trim()
+          .replace(/^[「"'']+|[」"'']+$/g, '')
+          .trim()
+        if (v) {
+          out[c.key] = v
+          break
+        }
+      }
+    }
+  }
+  return out
+}
+
 function reconcileRows(rows: DataRow[], newColumns: LiveReportColumn[]): DataRow[] {
   return rows.map(r => {
     const next: Record<string, string> = {}
@@ -1053,7 +1092,9 @@ function ColumnManagerModal({
             </span>
             <span>标签名</span>
             <span>单位</span>
-            <span>类型</span>
+            <span title="规则固定：规则里写「字段名：定值」就直接填入、不发给 AI；没写定值则仍按截图识别 + 规则修正">
+              类型
+            </span>
             <span>分组</span>
             <span title="四舍五入到几位小数">小数位</span>
             <span />
@@ -1521,6 +1562,41 @@ export default function DataEntry() {
     }
     return out
   }, [sectionNotes])
+
+  /** 上一次自动填入的定值：用来区分「用户手改过」和「规则带来的值」 */
+  const lastFixedValuesRef = useRef<Record<string, string>>({})
+  /**
+   * 「规则固定」智能型：有定值就直接带进格子，不依赖识别、也不改任何配置。
+   * 只在格子为空时填，用户手改过的一律保留；仅当规则里的定值变了、
+   * 且当前值仍等于上次自动填的旧值时，才跟着更新。
+   */
+  useEffect(() => {
+    const fixedValues = parseFixedValues(globalNotes, columns)
+    const prev = lastFixedValuesRef.current
+    lastFixedValuesRef.current = fixedValues
+    if (rows.length === 0) return
+    setRows(prevRows => {
+      let any = false
+      const next = prevRows.map(row => {
+        const vals = { ...row.values }
+        let touched = false
+        for (const c of columns) {
+          if (c.platform !== row.platform || c.source !== 'fixed') continue
+          const want = fixedValues[c.key]
+          if (!want) continue
+          const cur = String(vals[c.key] ?? '')
+          if (!cur || (prev[c.key] && cur === prev[c.key] && cur !== want)) {
+            vals[c.key] = want
+            touched = true
+          }
+        }
+        if (touched) any = true
+        return touched ? { ...row, values: vals } : row
+      })
+      return any ? next : prevRows
+    })
+  }, [columns, globalNotes, rows])
+
   useEffect(() => {
     setSectionNotes(prev => {
       const keys = Object.keys(prev).filter(k => k !== '__all__')
@@ -1864,6 +1940,12 @@ export default function DataEntry() {
       const allImages = imagesOf(platform)
       const targetImages = opts?.images ?? allImages.filter(i => !i.recognized)
       const platformColumns = columns.filter(c => c.platform === platform)
+      // 「规则固定」智能型：规则里写了定值的字段不发给 AI（后面直接填值）；
+      // 只有格式说明 / 没写规则的，仍按普通视觉识别让 AI 读图、再由规则修正。
+      const fixedValues = parseFixedValues(globalNotes, platformColumns)
+      const columnsForAI = platformColumns.map(c =>
+        c.source === 'fixed' && !fixedValues[c.key] ? { ...c, source: 'vision' as const } : c,
+      )
       // 该平台的活跃行：优先选中行，否则第一条该平台的行
       const targetRow =
         rows.find(r => r.id === activeRowId && r.platform === platform) ??
@@ -1907,7 +1989,7 @@ export default function DataEntry() {
             apiKey,
             customBaseURL: config.provider === 'custom' ? customBaseURL : undefined,
           },
-          columns: platformColumns,
+          columns: columnsForAI,
           runId, // 暂停时按这个 id 找到本次任务
           // 空规则（刚点「添加一条」还没写）不发给模型
           extraInstructions: globalNotes.map(n => n.trim()).filter(Boolean),
@@ -1936,6 +2018,10 @@ export default function DataEntry() {
           prev.map(r => {
             if (r.id !== targetRow?.id) return r
             const merged = { ...r.values, ...result.values }
+            // 有定值的「规则固定」字段被排除识别，这里补一次；只填空、不覆盖手改
+            for (const [k, v] of Object.entries(fixedValues)) {
+              if (!String(merged[k] ?? '').trim()) merged[k] = v
+            }
             // 先按列单位归一化（万 / 百分比 / 小时），再按「小数位」四舍五入
             // —— 识别出来是「9700」（个）而表格要「0.97」（万）时，这一步自动换算
             for (const c of platformColumns) {
