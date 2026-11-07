@@ -251,6 +251,8 @@ export interface IpcChannels {
   [IPC_CHANNELS.dataEntry.syncLedgerXlsx]: (params: {
     sheets: LedgerSheetPayload[]
     outputPath: string
+    /** 只更新传进来的工作表，文件里其它工作表原样保留 */
+    incremental?: boolean
   }) => string
 
   // 配置迁移（账号配置导出 / 导入）

@@ -167,7 +167,9 @@ function setupIpcHandlers() {
   })
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.syncLedgerXlsx, async (_, params) => {
-    return await xlsxExportService.writeLedgerXlsx(params.sheets, params.outputPath)
+    return await xlsxExportService.writeLedgerXlsx(params.sheets, params.outputPath, {
+      incremental: true,
+    })
   })
 }
 

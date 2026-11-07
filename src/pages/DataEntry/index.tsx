@@ -2335,13 +2335,20 @@ export default function DataEntry() {
 
   /** 把当前整表写进同步目标文件（内部用，不弹提示） */
   const writeLedgerSync = useCallback(
-    async (outputPath: string) => {
+    async (outputPath: string, onlySheet?: string) => {
       if (!outputPath) return
+      // 每个板块底部都有这个按钮：只把该板块那张工作表传过去，别动其它工作表
+      const sheets = onlySheet
+        ? ledgerExportPayload.sheets.filter(s => s.name === onlySheet)
+        : ledgerExportPayload.sheets
+      // 这个板块还没配字段时不要碰文件，避免把已有内容冲掉
+      if (sheets.length === 0) return
       setSyncing(true)
       try {
         await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.syncLedgerXlsx, {
-          sheets: ledgerExportPayload.sheets,
+          sheets,
           outputPath,
+          incremental: true,
         })
         setLastSyncedAt(Date.now())
       } catch (error) {
@@ -2382,17 +2389,27 @@ export default function DataEntry() {
     toast.success('已停止实时同步，已写入的数据不动')
   }, [ledgerSync.filePath, toast])
 
-  /** 立刻同步一次（等不及防抖，或想确认文件是最新的） */
-  const handleSyncNow = useCallback(async () => {
-    if (!ledgerSync.filePath) {
-      await handleStartLedgerSync()
-      return
-    }
-    await writeLedgerSync(ledgerSync.filePath)
-    toast.success(
-      `已同步 ${ledgerExportPayload.sheets.length} 个板块（共 ${ledgerExportPayload.totalRows} 行）→ ${ledgerSync.filePath}`,
-    )
-  }, [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast])
+  /** 立刻同步一次；传 onlySheet 时只更新该板块的工作表（板块底部按钮） */
+  const handleSyncNow = useCallback(
+    async (onlySheet?: string) => {
+      if (!ledgerSync.filePath) {
+        await handleStartLedgerSync()
+        return
+      }
+      const sheets = onlySheet
+        ? ledgerExportPayload.sheets.filter(s => s.name === onlySheet)
+        : ledgerExportPayload.sheets
+      if (sheets.length === 0) {
+        toast.error('这个板块还没有配置字段，先去「管理列」添加')
+        return
+      }
+      await writeLedgerSync(ledgerSync.filePath, onlySheet)
+      toast.success(
+        `已同步 ${sheets.length} 个板块（共 ${sheets.reduce((n, s) => n + s.rows.length, 0)} 行）→ ${ledgerSync.filePath}`,
+      )
+    },
+    [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast],
+  )
 
   /**
    * 总表变了就自动写文件（防抖 900ms，避免连续敲字时反复写盘）。
@@ -2887,7 +2904,11 @@ export default function DataEntry() {
                       不用重复导出文件，统一同步到总表） */}
                   <Button
                     size="sm"
-                    onClick={ledgerSync.enabled ? handleSyncNow : handleStartLedgerSync}
+                    onClick={
+                      ledgerSync.enabled
+                        ? () => handleSyncNow(sectionLabel(pf))
+                        : () => handleStartLedgerSync()
+                    }
                     disabled={syncing || ledgerExportPayload.sheets.length === 0}
                     title={
                       ledgerSync.filePath
@@ -3029,7 +3050,7 @@ export default function DataEntry() {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={handleSyncNow}
+                      onClick={() => handleSyncNow()}
                       disabled={syncing}
                       title={`${ledgerSync.filePath}\n${
                         lastSyncedAt

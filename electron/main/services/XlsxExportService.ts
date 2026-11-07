@@ -3,7 +3,6 @@ import path from 'node:path'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import type { LedgerSheetPayload } from 'shared/electron-api'
-import type { LiveReportColumn } from 'shared/liveReportColumns'
 import { createLogger } from '#/logger'
 
 /** 一个中文/全角字符在 Excel 里约占 2 个半角宽度 */
@@ -81,13 +80,32 @@ export class XlsxExportService {
    * 表头行高 40 / 数据行 24、列宽跟内容走、冻结表头 + 前几列。数字写成数值类型。
    * 落盘用「写临时文件 → rename 原子替换」，任何时刻读到的都是完整文件。
    */
-  async writeLedgerXlsx(sheets: LedgerSheetPayload[], outputPath: string): Promise<string> {
+  /**
+   * incremental（「同步到总表」按钮）：读回已有文件，**只重建传进来的那些工作表**。
+   * 文件里其它工作表（已删板块留下的、用户自己新建的）一律保留；
+   * 目标表按当前字段/数据整表重建，所以软件里删掉的行、删掉的字段同步后会真的消失。
+   * 非 incremental（「导出」另存为）：新建工作簿全量写入。
+   */
+  async writeLedgerXlsx(
+    sheets: LedgerSheetPayload[],
+    outputPath: string,
+    opts: { incremental?: boolean } = {},
+  ): Promise<string> {
     const workbook = new ExcelJS.Workbook()
     workbook.creator = 'LiveDeck・直播台'
     workbook.created = new Date()
+    if (opts.incremental) {
+      try {
+        await workbook.xlsx.readFile(outputPath)
+      } catch {
+        // 文件还不存在 / 损坏 / 被占用 → 当作新文件建
+      }
+    }
 
-    const usedSheetNames = new Set<string>()
-    let maxCols = 1
+    const usedSheetNames = new Set<string>(workbook.worksheets.map(w => w.name))
+    let maxCols = opts.incremental
+      ? Math.max(1, ...workbook.worksheets.map(w => w.columnCount || 0))
+      : 1
     let totalRows = 0
 
     for (const section of sheets) {
@@ -97,16 +115,27 @@ export class XlsxExportService {
       maxCols = Math.max(maxCols, usedColumns.length)
       totalRows += section.rows.length
 
-      const sheet = workbook.addWorksheet(this.safeSheetName(section.name, usedSheetNames), {
-        views: [
-          {
-            state: 'frozen',
-            ySplit: 1,
-            xSplit: Math.min(6, usedColumns.length),
-            showGridLines: false,
-          },
-        ],
-      })
+      const sheetName = opts.incremental
+        ? section.name
+        : this.safeSheetName(section.name, usedSheetNames)
+      usedSheetNames.add(sheetName)
+      let sheet = opts.incremental ? workbook.getWorksheet(sheetName) : undefined
+      if (sheet) {
+        // 保留工作表对象与它在文件里的位置，只把内容清空后按当前数据重建。
+        // 逐行删比 spliceRows(1, rowCount) 干净（实测后者会残留旧行旧列）。
+        while (sheet.rowCount > 0) sheet.spliceRows(1, 1)
+      } else {
+        sheet = workbook.addWorksheet(sheetName, {
+          views: [
+            {
+              state: 'frozen',
+              ySplit: 1,
+              xSplit: Math.min(6, usedColumns.length),
+              showGridLines: false,
+            },
+          ],
+        })
+      }
 
       // 列宽自适应：以实际数据为主，长表头折行，不把整列撑宽
       sheet.columns = usedColumns.map(c => {
@@ -156,7 +185,7 @@ export class XlsxExportService {
     await this.renameWithRetry(tmpPath, outputPath)
 
     this.logger.info(
-      `同步 ${sheets.length} 个板块 / ${totalRows} 行到 ${outputPath}（${sheets
+      `${opts.incremental ? '增量同步' : '导出'} ${sheets.length} 个板块 / ${totalRows} 行到 ${outputPath}（${sheets
         .map(s => `${s.name}:${s.rows.length}行`)
         .join('，')}）`,
     )
