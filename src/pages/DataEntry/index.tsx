@@ -1635,44 +1635,6 @@ export default function DataEntry() {
     })
   }, [persistNotes])
 
-  /**
-   * 兜底救援：如果 localStorage 读出来是空的（曾经出现过读不到的情况），
-   * 就把用户之前写过的这批规则重新写回一份，避免「规则凭空消失」。
-   * 只补一次（用 rescue_v1 标记），之后用户自己删空不会再被塞回来。
-   */
-  useEffect(() => {
-    const RESCUE_RULES = [
-      '观看核心城市、成交核心城市只填排第一的那一个，不要带具体占比、不要顿号连写',
-      '所有百分比字段都要带上 % 号',
-      '直播时长写成「2小时05分」这种，不要写小数',
-      '时间写成「10:40-13:08」这种具体时间段',
-      '十点之后开始的是午场或下午场，请自行判断场次',
-      '主品填：VD FIT全燃美塑仪EMS腰带',
-      '服装颜色填：上衣斜肩无袖抹胸背心不规则包臀半身裙',
-      '¥符号不要带、,号也不要带',
-      'GMV下面的万不是单位，不要带',
-    ]
-    if (localStorage.getItem('data-entry-notes-rescued') === '1') return
-    const raw = localStorage.getItem('data-entry-section-notes')
-    const hasContent = (() => {
-      try {
-        const parsed = raw ? JSON.parse(raw) : null
-        if (!parsed || typeof parsed !== 'object') return false
-        return Object.values(parsed as Record<string, unknown>).some(
-          list => Array.isArray(list) && list.length > 0,
-        )
-      } catch {
-        return false
-      }
-    })()
-    localStorage.setItem('data-entry-notes-rescued', '1')
-    if (hasContent) return
-    const next = { __all__: RESCUE_RULES }
-    localStorage.setItem('data-entry-section-notes', JSON.stringify(next))
-    setSectionNotes(next)
-    toast.success('已把你的 9 条填写规则恢复回来')
-  }, [toast])
-
   /** 一键清空某个板块这一行的全部字段值（截图不动） */
   const clearSectionValues = useCallback(
     (platform: string) => {
