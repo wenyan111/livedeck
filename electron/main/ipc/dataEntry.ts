@@ -4,6 +4,7 @@ import { app, dialog } from 'electron'
 import ExcelJS from 'exceljs'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { dataEntryImagesService } from '#/services/DataEntryImagesService'
+import { dataEntrySectionsService } from '#/services/DataEntrySectionsService'
 import { dataEntryStateService } from '#/services/DataEntryStateService'
 import { ledgerSyncService } from '#/services/LedgerSyncService'
 import { liveReportColumnsService } from '#/services/LiveReportColumnsService'
@@ -113,6 +114,15 @@ function setupIpcHandlers() {
 
   typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveRows, async (_, state) => {
     await dataEntryStateService.saveState(state)
+  })
+
+  // ── 板块列表 / 板块名（落主进程，强退或重装都不会回退） ──
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.getSections, async () => {
+    return await dataEntrySectionsService.load()
+  })
+
+  typedIpcMainHandle(IPC_CHANNELS.dataEntry.saveSections, async (_, state) => {
+    return await dataEntrySectionsService.save(state)
   })
 
   // ── 截图存档（下次打开还在） ──

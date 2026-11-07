@@ -110,6 +110,9 @@ export const IPC_CHANNELS = {
     // 表单数据持久化（防止 app 重启后已填数据丢失）
     getRows: 'dataEntry:getRows',
     saveRows: 'dataEntry:saveRows',
+    // 板块列表 / 板块名（原来只在 localStorage，强退会回退，2026-11-07 起落主进程）
+    getSections: 'dataEntry:getSections',
+    saveSections: 'dataEntry:saveSections',
     // 截图存档（关掉软件再打开，上次拖进来的图还在）
     getImages: 'dataEntry:getImages',
     saveImages: 'dataEntry:saveImages',

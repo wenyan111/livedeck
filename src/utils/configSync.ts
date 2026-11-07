@@ -1,4 +1,9 @@
 import type { LedgerRecord } from 'shared/dataEntryLedger'
+import {
+  type DataEntrySectionsState,
+  mergeSectionsState,
+  normalizeSectionsState,
+} from 'shared/dataEntrySections'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { LiveReportColumn } from 'shared/liveReportColumns'
@@ -260,10 +265,17 @@ export async function collectConfig(): Promise<ConfigPayload> {
   let sections: unknown
   let sectionNames: unknown
   try {
-    const rawSections = localStorage.getItem(SECTIONS_KEY)
-    sections = rawSections ? JSON.parse(rawSections) : undefined
-    const rawNames = localStorage.getItem(SECTION_NAMES_KEY)
-    sectionNames = rawNames ? JSON.parse(rawNames) : undefined
+    // 以主进程存档为主、localStorage 镜像为辅，取并集后导出，任一边丢过都能带走
+    const onDisk = (await window.ipcRenderer.invoke(
+      IPC_CHANNELS.dataEntry.getSections,
+    )) as DataEntrySectionsState | null
+    const localState = normalizeSectionsState({
+      sections: JSON.parse(localStorage.getItem(SECTIONS_KEY) || 'null') ?? [],
+      names: JSON.parse(localStorage.getItem(SECTION_NAMES_KEY) || 'null') ?? {},
+    })
+    const merged = mergeSectionsState(normalizeSectionsState(onDisk), localState)
+    sections = merged.sections
+    sectionNames = merged.names
   } catch {
     // 读不到就算了
   }
@@ -491,6 +503,25 @@ export async function applyConfig(payload: unknown): Promise<ImportResult> {
       } catch {
         // 忽略
       }
+    }
+    /**
+     * 板块配置同时写进主进程存档。
+     * 页面加载时以主进程存档为准，不写这一步的话，刚导入的板块会被旧存档盖掉（2026-11-07）。
+     */
+    try {
+      const onDisk = (await window.ipcRenderer.invoke(
+        IPC_CHANNELS.dataEntry.getSections,
+      )) as DataEntrySectionsState | null
+      const localState = normalizeSectionsState({
+        sections: JSON.parse(localStorage.getItem(SECTIONS_KEY) || 'null') ?? [],
+        names: JSON.parse(localStorage.getItem(SECTION_NAMES_KEY) || 'null') ?? {},
+      })
+      await window.ipcRenderer.invoke(
+        IPC_CHANNELS.dataEntry.saveSections,
+        mergeSectionsState(localState, normalizeSectionsState(onDisk)),
+      )
+    } catch {
+      // 忽略
     }
     // 日报总表：按 id 合并，本机记录优先，不覆盖
     if (Array.isArray(data.dataEntry.ledger) && data.dataEntry.ledger.length > 0) {

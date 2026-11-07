@@ -26,6 +26,11 @@ import {
   ledgerKeyOf,
   newLedgerId,
 } from 'shared/dataEntryLedger'
+import {
+  type DataEntrySectionsState,
+  mergeSectionsState,
+  normalizeSectionsState,
+} from 'shared/dataEntrySections'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { LedgerSyncConfig } from 'shared/ledgerSync'
@@ -1420,13 +1425,12 @@ export default function DataEntry() {
     }
     return [TABLE_PLATFORM]
   })
-  useEffect(() => {
-    try {
-      localStorage.setItem('data-entry-sections', JSON.stringify(sectionPlatforms))
-    } catch {
-      // 存不进去也不影响使用
-    }
-  }, [sectionPlatforms])
+  /**
+   * 板块配置是否已经从主进程存档读过。
+   * 🔴 没读过之前**绝不回写**：否则会拿初始化时的默认值（["douyin"] / {}）
+   * 把存档覆盖掉 —— 这正是「板块被删了」「抖音变回抖音小店」的成因（2026-11-07）。
+   */
+  const sectionsLoadedRef = useRef(false)
 
   /**
    * 「纠正记忆」：用户在板块里对着 AI 说一句（如「观看核心城市只填第一名」），
@@ -1570,6 +1574,28 @@ export default function DataEntry() {
       return next
     })
   }, [])
+
+  /**
+   * 板块配置一有变化就**双写**：
+   * - localStorage：配置迁移（导出/导入）还在读它，也当兜底镜像；
+   * - 主进程 JSON：真正防丢的那一份，强退 / 自动更新 / 覆盖安装都不会回退。
+   * 加载完成前不写，避免默认值覆盖存档。
+   */
+  useEffect(() => {
+    if (!sectionsLoadedRef.current) return
+    try {
+      localStorage.setItem('data-entry-sections', JSON.stringify(sectionPlatforms))
+      localStorage.setItem('data-entry-section-names', JSON.stringify(sectionNames))
+    } catch {
+      // 存不进去不影响使用
+    }
+    void window.ipcRenderer
+      .invoke(IPC_CHANNELS.dataEntry.saveSections, {
+        sections: sectionPlatforms,
+        names: sectionNames,
+      })
+      .catch(() => {})
+  }, [sectionPlatforms, sectionNames])
 
   /**
    * 数据归位：早期的迁移把「行 / 列」的 platform 跟着当前账号改过，
@@ -1721,6 +1747,47 @@ export default function DataEntry() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      /**
+       * 板块列表 / 板块名：**以主进程存档为准**，再和 localStorage 镜像取并集。
+       * 取并集而不是覆盖，是为了「任何一边有、另一边丢了」都能救回来，绝不删板块。
+       */
+      try {
+        const saved = (await window.ipcRenderer.invoke(
+          IPC_CHANNELS.dataEntry.getSections,
+        )) as DataEntrySectionsState | null
+        if (cancelled) return
+        const fromDisk = normalizeSectionsState(saved)
+        let fromLocal: DataEntrySectionsState = { sections: [], names: {} }
+        try {
+          fromLocal = normalizeSectionsState({
+            sections: JSON.parse(localStorage.getItem('data-entry-sections') || 'null') ?? [],
+            names: JSON.parse(localStorage.getItem('data-entry-section-names') || 'null') ?? {},
+          })
+        } catch {
+          // 本地镜像坏了就用存档里的
+        }
+        const merged = mergeSectionsState(fromDisk, fromLocal)
+        const nextSections = merged.sections.length > 0 ? merged.sections : [TABLE_PLATFORM]
+        setSectionPlatforms(nextSections)
+        setSectionNames(merged.names)
+        // 合一之后立刻回写一份，两边从此保持一致（存档文件不存在时也就此建立）
+        void window.ipcRenderer
+          .invoke(IPC_CHANNELS.dataEntry.saveSections, {
+            sections: nextSections,
+            names: merged.names,
+          })
+          .catch(() => {})
+        try {
+          localStorage.setItem('data-entry-sections', JSON.stringify(nextSections))
+          localStorage.setItem('data-entry-section-names', JSON.stringify(merged.names))
+        } catch {
+          // 忽略
+        }
+      } catch {
+        // 读不到存档就沿用 localStorage 里的值
+      }
+      sectionsLoadedRef.current = true
+
       let safe = getDefaultColumns()
       try {
         const cols = (await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.getColumns)) as
@@ -1765,7 +1832,7 @@ export default function DataEntry() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [TABLE_PLATFORM])
 
   // 首次进入：把闲置的视觉配置默认指向智谱 glm-4v-plus
   useEffect(() => {

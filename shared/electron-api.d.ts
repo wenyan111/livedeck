@@ -2,6 +2,7 @@ import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import type { DashboardSnapshot, DouyinDashboardConfig } from './dashboard'
 import type { LedgerRecord } from './dataEntryLedger'
+import type { DataEntrySectionsState } from './dataEntrySections'
 import type { DataEntrySavedState } from './dataEntryState'
 import { IPC_CHANNELS } from './ipcChannels'
 import type { LedgerSyncConfig } from './ledgerSync'
@@ -227,6 +228,11 @@ export interface IpcChannels {
   // 表单数据持久化
   [IPC_CHANNELS.dataEntry.getRows]: () => DataEntrySavedState | null
   [IPC_CHANNELS.dataEntry.saveRows]: (state: DataEntrySavedState) => void
+  // 板块列表 / 板块名（主进程存档，防止强退/重装后回退）
+  [IPC_CHANNELS.dataEntry.getSections]: () => DataEntrySectionsState
+  [IPC_CHANNELS.dataEntry.saveSections]: (
+    state: Partial<DataEntrySectionsState>,
+  ) => DataEntrySectionsState
   // 截图存档（下次打开还在）
   [IPC_CHANNELS.dataEntry.getImages]: () => Record<
     string,
