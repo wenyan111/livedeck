@@ -150,8 +150,8 @@ export default function ConfigTransfer() {
               <p>
                 自动回复（关键词 / AI 提示词 / 黑名单 / @ 回复开关）、开价话术、自动弹窗、批量话术、
                 跨平台开价联动、快速开始选中项、AI 助手的服务商与 API Key、
-                <b>备用模型列表</b>、直播日报的列配置（含列顺序、类型、小数位）、
-                已填数据，以及每个板块的<b>填写规则</b>。
+                <b>备用模型列表</b>、直播日报的列配置（含列顺序、类型、小数位）、 已填数据、
+                <b>板块列表与自定义名称</b>、日报总表已汇总的记录， 以及每个板块的<b>填写规则</b>。
               </p>
               <p className="font-medium text-foreground pt-2">不会带走什么</p>
               <p>
@@ -161,10 +161,13 @@ export default function ConfigTransfer() {
               <p>
                 <b>表格实时同步的文件路径</b>也不带：那是本机的绝对路径，换了机器得重新选一次文件
                 （直播日报页 →「实时写入表格」→ 选择文件）。
+                <b>截图存档</b>也不带：里面是图片 base64，动辄十几 MB，会把配置文件撑得很大；
+                本机原有截图不受影响。
               </p>
               <p className="font-medium text-foreground pt-2">注意</p>
               <p>
                 导出的是<b>明文 JSON</b>，里面有 AI 的 API Key，请勿外传或放进公开仓库。
+                导入的板块、列、规则等改动，切一下页面或重启软件即可看到。
               </p>
             </div>
           </CardContent>

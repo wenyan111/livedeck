@@ -1,3 +1,4 @@
+import type { LedgerRecord } from 'shared/dataEntryLedger'
 import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { LiveReportColumn } from 'shared/liveReportColumns'
@@ -44,6 +45,9 @@ const FORMAT_VERSION = 1
 
 /** 「填写规则」的 localStorage key（与 DataEntry 页面一致） */
 const NOTES_KEY = 'data-entry-section-notes'
+/** 板块列表 / 自定义板块名：列配置和填写规则都按板块 key 存，缺了这两个迁移过去就是孤儿 */
+const SECTIONS_KEY = 'data-entry-sections'
+const SECTION_NAMES_KEY = 'data-entry-section-names'
 
 type Persisted = { state?: Record<string, unknown>; version?: number } & Record<string, unknown>
 
@@ -67,6 +71,12 @@ export type ConfigPayload = {
     rows?: unknown
     /** 「填写规则」：{ 板块 key: string[] }，裸 JSON，不走 persist 结构 */
     notes?: unknown
+    /** 板块 key 列表 */
+    sections?: unknown
+    /** 板块 key → 自定义名称 */
+    sectionNames?: unknown
+    /** 日报总表已汇总的记录（按 id 合并） */
+    ledger?: unknown
   }
 }
 
@@ -246,6 +256,24 @@ export async function collectConfig(): Promise<ConfigPayload> {
     notes = undefined
   }
 
+  // 板块列表 / 名称 + 日报总表记录：不加这些，按板块存的列配置和填写规则到了新机器会找不到板块
+  let sections: unknown
+  let sectionNames: unknown
+  try {
+    const rawSections = localStorage.getItem(SECTIONS_KEY)
+    sections = rawSections ? JSON.parse(rawSections) : undefined
+    const rawNames = localStorage.getItem(SECTION_NAMES_KEY)
+    sectionNames = rawNames ? JSON.parse(rawNames) : undefined
+  } catch {
+    // 读不到就算了
+  }
+  let ledger: unknown
+  try {
+    ledger = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.getLedger)
+  } catch {
+    // 取不到就算了
+  }
+
   return {
     format: FORMAT,
     version: FORMAT_VERSION,
@@ -253,7 +281,7 @@ export async function collectConfig(): Promise<ConfigPayload> {
     skippedShellAccounts: all.length - accounts.length,
     accounts,
     stores,
-    dataEntry: { columns, rows, notes },
+    dataEntry: { columns, rows, notes, sections, sectionNames, ledger },
   }
 }
 
@@ -387,6 +415,7 @@ export async function applyConfig(payload: unknown): Promise<ImportResult> {
           data.dataEntry.rows as DataEntrySavedState,
         )
       }
+      if (data.dataEntry.columns || data.dataEntry.rows) applied++
     } catch {
       // 日报这块失败不影响其它配置
     }
@@ -423,8 +452,61 @@ export async function applyConfig(payload: unknown): Promise<ImportResult> {
       }
       try {
         localStorage.setItem(NOTES_KEY, JSON.stringify(merged))
+        applied++
       } catch {
         // 存不进去不影响其它配置
+      }
+    }
+
+    // 板块列表：取并集，绝不删本机已有板块
+    if (Array.isArray(data.dataEntry.sections)) {
+      try {
+        const incoming = (data.dataEntry.sections as unknown[]).filter(
+          (x): x is string => typeof x === 'string' && x.trim() !== '',
+        )
+        const local = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '[]')
+        const mergedSections = Array.from(
+          new Set([...(Array.isArray(local) ? local : []), ...incoming]),
+        )
+        localStorage.setItem(SECTIONS_KEY, JSON.stringify(mergedSections))
+        applied++
+      } catch {
+        // 忽略
+      }
+    }
+    // 板块名：本机已有的保留，只补本机没有的 key
+    if (isPlainObject(data.dataEntry.sectionNames)) {
+      try {
+        const local = JSON.parse(localStorage.getItem(SECTION_NAMES_KEY) || '{}')
+        const mergedNames: Record<string, string> = isPlainObject(local)
+          ? { ...(local as Record<string, string>) }
+          : {}
+        for (const [key, value] of Object.entries(data.dataEntry.sectionNames)) {
+          if (typeof value === 'string' && value.trim() && !(key in mergedNames)) {
+            mergedNames[key] = value
+          }
+        }
+        localStorage.setItem(SECTION_NAMES_KEY, JSON.stringify(mergedNames))
+        applied++
+      } catch {
+        // 忽略
+      }
+    }
+    // 日报总表：按 id 合并，本机记录优先，不覆盖
+    if (Array.isArray(data.dataEntry.ledger) && data.dataEntry.ledger.length > 0) {
+      try {
+        const local = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.getLedger)
+        const byId = new Map<string, LedgerRecord>()
+        for (const r of Array.isArray(local) ? (local as LedgerRecord[]) : []) {
+          if (r?.id) byId.set(r.id, r)
+        }
+        for (const r of data.dataEntry.ledger as LedgerRecord[]) {
+          if (r?.id && !byId.has(r.id)) byId.set(r.id, r)
+        }
+        await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.saveLedger, [...byId.values()])
+        applied++
+      } catch {
+        // 忽略
       }
     }
   }
