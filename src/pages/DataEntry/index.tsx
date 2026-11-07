@@ -2212,24 +2212,25 @@ export default function DataEntry() {
     return () => clearTimeout(t)
   }, [rows, sectionLabel])
 
-  // ── 总表：表头（各板块字段并集）、排序后的行 ──
+  // ── 总表：按板块分组，一个板块一张表 ──
   /**
-   * 总表的表头：**只取「有数据的板块」自己的字段**。
-   * 以前是全部板块字段并集再按 key 去重，谁排前面用谁的标签 ——
-   * 结果用户在抖音板块把「直播时长（h）」改成「直播时长」，总表里还是显示带（h）的那份
-   * （另一个没数据的板块也有同名字段，且排在前面）。2026-11-06 用户反馈。
+   * 页面上也不再把各板块挤成一张宽表（用户 2026-11-07：「各个板块的表格不能放一起，
+   * 后面字段肯定有不一样的地方」）。以前表头取字段并集，别的板块的列会混进来、一半格子空着。
+   * 现在每个板块用自己的列 + 自己的行，单独渲染一张表；导出的 xlsx 本来就是分工作表的，两边一致。
    */
-  const ledgerColumns = useMemo(() => {
-    const target = ledgerFilter
-      ? new Set([ledgerFilter])
-      : new Set(ledger.map(r => String(r.sectionKey ?? '')))
-    const scoped = columns.filter(c => target.has(String(c.platform ?? '')))
-    return buildLedgerColumns(scoped.length > 0 ? scoped : columns)
-  }, [columns, ledger, ledgerFilter])
-  const ledgerRows = useMemo(
-    () => sortLedgerDesc(ledgerFilter ? ledger.filter(r => r.sectionKey === ledgerFilter) : ledger),
-    [ledger, ledgerFilter],
-  )
+  const ledgerGroups = useMemo(() => {
+    const keys = ledgerFilter
+      ? [ledgerFilter]
+      : [...new Set(ledger.map(r => String(r.sectionKey ?? '')))].filter(Boolean)
+    return keys
+      .map(key => ({
+        key,
+        name: sectionLabel(key),
+        columns: buildLedgerColumns(columns.filter(c => String(c.platform ?? '') === key)),
+        rows: sortLedgerDesc(ledger.filter(r => r.sectionKey === key)),
+      }))
+      .filter(group => group.rows.length > 0)
+  }, [ledger, columns, ledgerFilter, sectionLabel])
 
   /**
    * 导出 / 实时同步用的数据：**一个板块一张表**。
@@ -2260,11 +2261,9 @@ export default function DataEntry() {
         columns: cols,
         rows: rowsBySection.get(key) ?? [],
       }))
-      // 只给「有数据 + 有字段」的板块建表
-      .filter(
-        sheet =>
-          sheet.rows.length > 0 && sheet.columns.some(c => String(c.label ?? '').trim() !== ''),
-      )
+      // 只要配了字段就建工作表：新建板块暂时没数据时，也先放好表头，
+      // 用户点一次同步就能看到新工作表，不用自己手工新建（用户 2026-11-07）
+      .filter(sheet => sheet.columns.some(c => String(c.label ?? '').trim() !== ''))
     return {
       sheets,
       totalRows: sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0),
@@ -2315,8 +2314,8 @@ export default function DataEntry() {
 
   /** 一次性导出整张总表（所有板块、所有日期） */
   const handleExportLedger = useCallback(async () => {
-    if (ledgerExportPayload.totalRows === 0) {
-      toast.error('总表还是空的，先在录入页识别/填写数据')
+    if (ledgerExportPayload.sheets.length === 0) {
+      toast.error('还没有配置任何板块字段，先去「管理列」添加')
       return
     }
     const outputPath = await window.ipcRenderer.invoke(IPC_CHANNELS.dataEntry.selectOutputPath)
@@ -2889,7 +2888,7 @@ export default function DataEntry() {
                   <Button
                     size="sm"
                     onClick={ledgerSync.enabled ? handleSyncNow : handleStartLedgerSync}
-                    disabled={syncing || ledgerExportPayload.totalRows === 0}
+                    disabled={syncing || ledgerExportPayload.sheets.length === 0}
                     title={
                       ledgerSync.filePath
                         ? `写入：${ledgerSync.filePath}`
@@ -2986,6 +2985,10 @@ export default function DataEntry() {
                 <CardDescription className="text-xs">
                   共 {ledger.length} 条记录 · 按「日期 + 板块 +
                   场次」自动去重；格子里可以直接改，改完自动存
+                  <span className="block text-[11px] text-muted-foreground/80">
+                    按板块分表：各板块只用自己的字段；导出的 Excel 每个板块一张工作表，
+                    新建板块配好字段后点同步会自动建表
+                  </span>
                   {ledgerSync.enabled && (
                     <span className="block text-[11px] text-muted-foreground/80">
                       实时写入 {syncFileName}
@@ -3011,9 +3014,14 @@ export default function DataEntry() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Button size="sm" onClick={handleExportLedger} disabled={ledgerRows.length === 0}>
+                <Button
+                  size="sm"
+                  onClick={handleExportLedger}
+                  disabled={ledgerExportPayload.sheets.length === 0}
+                >
                   <Table className="w-4 h-4 mr-1" />
-                  导出整表（{ledgerRows.length} 行）
+                  导出（{ledgerExportPayload.totalRows} 行 · {ledgerExportPayload.sheets.length}{' '}
+                  张工作表）
                 </Button>
                 {/* 实时同步：总表一变就把整张表写进你电脑上的 .xlsx，不用反复导出 */}
                 {ledgerSync.enabled ? (
@@ -3050,67 +3058,66 @@ export default function DataEntry() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
-            {ledgerRows.length === 0 ? (
+          <CardContent className="space-y-4">
+            {ledgerGroups.length === 0 ? (
               <p className="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">
                 总表还是空的：去「分板块录入」里识别或填写数据，有内容的行会自动汇总到这里
               </p>
             ) : (
-              <div className="overflow-auto rounded-md border" style={{ maxHeight: 560 }}>
-                <table className="w-max border-collapse text-[11px]">
-                  <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
-                    <tr>
-                      {/* 只有「板块」是固定列；其余字段严格按你在「管理列」里定的顺序排，
-                          以前把 日期/场次 单独拎到最前面、还过滤掉了 周标签，
-                          结果顺序和列配置对不上、还少列（2026-11-06 用户反馈） */}
-                      <th className="min-w-[92px] border-b border-r px-2 py-1 text-left font-semibold">
-                        板块
-                      </th>
-                      {ledgerColumns.map(c => (
-                        <th
-                          key={c.key}
-                          className="min-w-[76px] border-b px-2 py-1 text-left font-semibold"
-                          title={c.key}
-                        >
-                          {c.label}
-                        </th>
-                      ))}
-                      <th className="border-b px-2 py-1" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ledgerRows.map(r => {
-                      const cols = ledgerColumns
-                      return (
-                        <tr key={r.id} className="hover:bg-muted/40">
-                          <td className="border-b border-r px-2 py-1 text-muted-foreground">
-                            {r.sectionName}
-                          </td>
-                          {cols.map(c => (
-                            <td key={c.key} className="border-b px-0.5 py-0.5">
-                              <input
-                                value={r.values[c.key] ?? ''}
-                                onChange={e => updateLedgerCell(r.id, c.key, e.target.value)}
-                                className="w-full min-w-[70px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
-                              />
-                            </td>
-                          ))}
-                          <td className="border-b px-1">
-                            <button
-                              type="button"
-                              onClick={() => removeLedgerRow(r.id)}
-                              className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              title="从总表删掉这一行"
+              ledgerGroups.map(group => (
+                <div key={group.key}>
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <h3 className="text-xs font-semibold">{group.name}</h3>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                      {group.rows.length} 行 · {group.columns.length} 列
+                    </span>
+                  </div>
+                  <div className="overflow-auto rounded-md border" style={{ maxHeight: 420 }}>
+                    <table className="w-max border-collapse text-[11px]">
+                      <thead className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
+                        <tr>
+                          {/* 每个板块只渲染自己的字段；板块名已在上方标题里，不再占一列 */}
+                          {group.columns.map(c => (
+                            <th
+                              key={c.key}
+                              className="min-w-[76px] border-b px-2 py-1 text-left font-semibold"
+                              title={c.key}
                             >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </td>
+                              {c.label}
+                            </th>
+                          ))}
+                          <th className="border-b px-2 py-1" />
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {group.rows.map(r => (
+                          <tr key={r.id} className="hover:bg-muted/40">
+                            {group.columns.map(c => (
+                              <td key={c.key} className="border-b px-0.5 py-0.5">
+                                <input
+                                  value={r.values[c.key] ?? ''}
+                                  onChange={e => updateLedgerCell(r.id, c.key, e.target.value)}
+                                  className="w-full min-w-[70px] rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] outline-none hover:border-border focus:border-primary focus:bg-background"
+                                />
+                              </td>
+                            ))}
+                            <td className="border-b px-1">
+                              <button
+                                type="button"
+                                onClick={() => removeLedgerRow(r.id)}
+                                className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                title="从总表删掉这一行"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))
             )}
           </CardContent>
         </Card>
