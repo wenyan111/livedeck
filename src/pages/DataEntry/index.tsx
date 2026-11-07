@@ -59,6 +59,7 @@ import {
 } from '@/components/ui/select'
 import { getEffectiveModel, useAIProvider } from '@/hooks/useAIProvider'
 import { useToast } from '@/hooks/useToast'
+import { cn } from '@/lib/utils'
 
 /** 方舟三个常用型号的显示名（快捷填按钮上用的） */
 const _VOLC_MODEL_LABELS: Record<string, string> = {
@@ -1453,6 +1454,13 @@ export default function DataEntry() {
   /** 「规则同步」：当前展开勾选区的板块 + 每个板块勾选的来源 */
   const [syncOpenFor, setSyncOpenFor] = useState('')
   const [syncSources, setSyncSources] = useState<Record<string, string[]>>({})
+  /** 板块切换条：'' = 全部板块（原样纵向全览），否则只显示选中的那个板块 */
+  const [activeSection, setActiveSection] = useState('')
+  /** 选中的板块被删掉时回到「全部板块」，避免页面空白 */
+  useEffect(() => {
+    if (activeSection && !sectionPlatforms.includes(activeSection)) setActiveSection('')
+  }, [sectionPlatforms, activeSection])
+
   /** 添加当前板块自己的规则（第一次改动会自动从通用规则复制一份出来） */
   const addSectionNote = useCallback(
     (key: string) => {
@@ -2510,9 +2518,48 @@ export default function DataEntry() {
         </span>
       </div>
 
+      {/* 板块切换条：和「自动回复设置」的分组条同一种语言；默认「全部板块」保持原样，
+          点某个板块就只看那一个，板块增删/改名时自动跟着变（用户 2026-11-07） */}
+      {view === 'entry' && sectionPlatforms.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 border-b pb-2">
+          <button
+            type="button"
+            onClick={() => setActiveSection('')}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-sm transition-colors',
+              activeSection === ''
+                ? 'bg-muted font-medium text-foreground'
+                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+            )}
+          >
+            全部板块
+          </button>
+          {sectionPlatforms.map(pf => (
+            <button
+              key={pf}
+              type="button"
+              onClick={() => setActiveSection(pf)}
+              className={cn(
+                'max-w-[180px] truncate rounded-md px-3 py-1.5 text-sm transition-colors',
+                activeSection === pf
+                  ? 'bg-muted font-medium text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+              )}
+              title={sectionLabel(pf)}
+            >
+              {sectionLabel(pf)}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {activeSection ? '只看当前板块' : '显示所有板块'}
+          </span>
+        </div>
+      )}
+
       {/* 按平台分板块：每个板块自带「截图识别 + 数据行」，板块与当前账号无关 */}
       {view === 'entry' &&
         sectionPlatforms.map(pf => {
+          if (activeSection && activeSection !== pf) return null
           // 当前板块实际生效的规则（没有自己的一套时继承通用规则）
           const activeNotes = notesFor(sectionNotes, pf)
           // 板块 key 是字符串，平台枚举只在取平台名/默认字段时用
