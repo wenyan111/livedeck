@@ -2489,6 +2489,23 @@ export default function DataEntry() {
     [sectionPlatforms, rows, columns, toast],
   )
 
+  /** 新建板块：key 与平台解耦；建好直接切过去，方便马上改名 / 导入字段 */
+  const addSection = useCallback(() => {
+    const key = `custom-${Date.now().toString(36)}`
+    setSectionPlatforms(prev => [...prev, key])
+    setSectionNames(prev => {
+      const next = { ...prev, [key]: `新板块 ${Object.keys(prev).length + 1}` }
+      try {
+        localStorage.setItem('data-entry-section-names', JSON.stringify(next))
+      } catch {
+        // 隐私模式写不进去就算了
+      }
+      return next
+    })
+    setActiveSection(key)
+    toast.success('已新建板块，点标题可以改名')
+  }, [toast])
+
   /** 导出该平台的行（只用该平台自己的列） */
 
   return (
@@ -2551,9 +2568,22 @@ export default function DataEntry() {
             </button>
           ))}
           <span className="ml-auto text-[11px] text-muted-foreground">
-            {activeSection ? '只看当前板块' : '显示所有板块'}
+            {activeSection ? '只看当前板块' : '显示所有板块'} · 共 {sectionPlatforms.length} 个
           </span>
+          <button
+            type="button"
+            onClick={addSection}
+            title="新建板块（建好后点标题改名，再到「管理列 → 导入字段」复制模板）"
+            className="flex shrink-0 items-center gap-1 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          >
+            <Plus className="h-3 w-3" /> 新建板块
+          </button>
         </div>
+      )}
+      {view === 'entry' && sectionPlatforms.length > 0 && (
+        <p className="-mt-1 text-[11px] text-muted-foreground/80">
+          新建后点标题改名，再点「管理列 → 导入字段」从其它板块复制模板
+        </p>
       )}
 
       {/* 按平台分板块：每个板块自带「截图识别 + 数据行」，板块与当前账号无关 */}
@@ -3049,36 +3079,6 @@ export default function DataEntry() {
             </Card>
           )
         })}
-
-      {/* 新建板块：板块与平台解耦，新建后自己改名、从别的板块导入字段 */}
-      {view === 'entry' && (
-        <Card>
-          <CardContent className="flex flex-wrap items-center gap-2 py-3">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const key = `custom-${Date.now().toString(36)}`
-                setSectionPlatforms(prev => [...prev, key])
-                setSectionNames(prev => {
-                  const next = { ...prev, [key]: `新板块 ${Object.keys(prev).length + 1}` }
-                  try {
-                    localStorage.setItem('data-entry-section-names', JSON.stringify(next))
-                  } catch {
-                    // 忽略
-                  }
-                  return next
-                })
-              }}
-            >
-              <Plus className="w-3.5 h-3.5 mr-1" /> 新建板块
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              新建后点标题改名，再点「管理列 → 导入字段」从其它板块复制模板
-            </span>
-          </CardContent>
-        </Card>
-      )}
 
       {/* ── 总表：所有板块、所有日期的数据都在这一张表里 ── */}
       {view === 'ledger' && (
