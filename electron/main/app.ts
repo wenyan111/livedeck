@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { emitter } from './event/eventBus'
 import { updateManager } from './managers/UpdateManager'
@@ -203,6 +203,23 @@ app
   .then(() => providerService.initialize())
   .then(() => douyinDashboardService.start())
   .then(createWindow)
+
+/** 退出前强制把 localStorage 落盘，防止关闭 / 自动更新后配置回退（2026-11-07） */
+let storageFlushed = false
+app.on('before-quit', event => {
+  // 自动更新路径已由 markForceQuit 刷过盘，且不能拦截 electron-updater 的退出
+  if (storageFlushed || windowManager.isForceQuit) return
+  storageFlushed = true
+  event.preventDefault()
+  try {
+    const target = win && !win.isDestroyed() ? win.webContents.session : session.defaultSession
+    target.flushStorageData()
+  } catch {
+    // 刷盘失败也不能阻止退出
+  }
+  // 给 Chromium 把 DOMStorage 写完的时间，再走正常退出（此时标记已置，不会再拦）
+  setTimeout(() => app.quit(), 600)
+})
 
 app.on('window-all-closed', async () => {
   win = null

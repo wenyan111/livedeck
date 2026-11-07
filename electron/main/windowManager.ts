@@ -1,5 +1,5 @@
 // utils/windowManager.js
-import type { BrowserWindow } from 'electron'
+import { type BrowserWindow, session } from 'electron'
 import type { IpcChannels } from 'shared/electron-api'
 
 class WindowManager {
@@ -8,6 +8,14 @@ class WindowManager {
   private forceQuit = false
 
   markForceQuit() {
+    // 自动更新会直接重启进程；先强制把 localStorage 等 DOMStorage 落盘，
+    // 否则重启后配置会整片回退（2026-11-07 两次「规则全没了」事故）。
+    // 只刷盘、不拦截退出流程，避免干扰 electron-updater 的安装器启动。
+    try {
+      session.defaultSession.flushStorageData()
+    } catch {
+      // 刷盘失败也不能卡住更新
+    }
     this.forceQuit = true
   }
 

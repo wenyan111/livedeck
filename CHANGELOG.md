@@ -1,5 +1,11 @@
 # Changelog
 
+## 待发布
+
+### 🐞 Bug Fixes
+- **修掉退出 / 自动更新后配置回退**：强退或 `quitAndInstall` 时 Chromium 的 DOMStorage 可能还没落盘，重启后 localStorage 整片回退（2026-11-07 两次导致填写规则全空、板块列表退回默认）。现在正常关闭 / Cmd+Q 会在 `before-quit` 里 `flushStorageData()` 并留出写盘时间；自动更新路径在 `markForceQuit()` 里刷盘，不拦截 electron-updater 的退出流程。
+- 安装流程同时加固：装前导出完整 localStorage 快照，装后逐 key 比对恢复，不再只核对填写规则。
+
 ## v1.3.2
 
 ### 📦 数据迁移补齐板块与总表
