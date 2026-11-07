@@ -342,22 +342,21 @@ const _PLATFORM_GROUP_LABELS: Record<string, string> = {
   dev: '测试',
 }
 
-/** 总表排序：日期新的在上，同一天早场在前，再按更新时间倒序 */
 /**
- * 把「按板块存的旧规则」塌缩成一份全局规则（key = __all__）。
- * 增删改都以它为基准，否则删掉的规则会从旧板块数据里又冒出来。
+ * 「填写规则」按板块各自一套：板块有自己的 key 就用自己的，
+ * 否则先继承通用规则（__all__）。第一次增删改时 ownNotes() 把继承来的复制成自己的一套，
+ * 这样以后改这个板块不会影响别的板块，且**不需要任何启动时迁移、不改现有数据**。
  */
-function collapseNotes(prev: Record<string, string[]>): Record<string, string[]> {
-  const merged: string[] = [...(prev.__all__ ?? [])]
-  for (const [key, list] of Object.entries(prev)) {
-    if (key === '__all__') continue
-    for (const rule of list ?? []) {
-      if (rule.trim() && !merged.includes(rule)) merged.push(rule)
-    }
-  }
-  return { __all__: merged }
+function notesFor(notes: Record<string, string[]>, key: string): string[] {
+  const own = notes[key]
+  return own === undefined ? [...(notes.__all__ ?? [])] : own
+}
+function ownNotes(notes: Record<string, string[]>, key: string): Record<string, string[]> {
+  if (notes[key] !== undefined) return notes
+  return { ...notes, [key]: [...(notes.__all__ ?? [])] }
 }
 
+/** 总表排序：日期新的在上，同一天早场在前，再按更新时间倒序 */
 function sortLedgerDesc(records: LedgerRecord[]): LedgerRecord[] {
   return [...records].sort((a, b) => {
     const da = a.values.date ?? ''
@@ -1451,19 +1450,22 @@ export default function DataEntry() {
   }, [])
   /** 各板块输入框里的草稿 */
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({})
-  // 规则是全局一份（key = __all__），不看当前板块
+  /** 「规则同步」：当前展开勾选区的板块 + 每个板块勾选的来源 */
+  const [syncOpenFor, setSyncOpenFor] = useState('')
+  const [syncSources, setSyncSources] = useState<Record<string, string[]>>({})
+  /** 添加当前板块自己的规则（第一次改动会自动从通用规则复制一份出来） */
   const addSectionNote = useCallback(
     (key: string) => {
       const text = (noteDraft[key] ?? '').trim()
       if (!text) return
       setSectionNotes(prev => {
-        const base = collapseNotes(prev)
-        const list = base.__all__ ?? []
+        const base = ownNotes(prev, key)
+        const list = base[key] ?? []
         if (list.includes(text)) {
           toast.error('这条已经记住了')
           return prev
         }
-        const next = { ...base, __all__: [...list, text] }
+        const next = { ...base, [key]: [...list, text] }
         persistNotes(next)
         return next
       })
@@ -1472,11 +1474,11 @@ export default function DataEntry() {
     [noteDraft, persistNotes, toast],
   )
   const removeSectionNote = useCallback(
-    (_key: string, index: number) => {
+    (key: string, index: number) => {
       setSectionNotes(prev => {
-        const base = collapseNotes(prev)
-        const list = (base.__all__ ?? []).filter((_, i) => i !== index)
-        const next = { ...base, __all__: list }
+        const base = ownNotes(prev, key)
+        const list = (base[key] ?? []).filter((_, i) => i !== index)
+        const next = { ...base, [key]: list }
         persistNotes(next)
         return next
       })
@@ -1485,18 +1487,45 @@ export default function DataEntry() {
   )
   /** 直接改某一条规则（用户 2026-11-05：这里要能改，不用删了重写） */
   const updateSectionNote = useCallback(
-    (_key: string, index: number, text: string) => {
+    (key: string, index: number, text: string) => {
       setSectionNotes(prev => {
-        const base = collapseNotes(prev)
-        const list = [...(base.__all__ ?? [])]
+        const base = ownNotes(prev, key)
+        const list = [...(base[key] ?? [])]
         if (index < 0 || index >= list.length) return prev
         list[index] = text
-        const next = { ...base, __all__: list }
+        const next = { ...base, [key]: list }
         persistNotes(next)
         return next
       })
     },
     [persistNotes],
+  )
+
+  /** 把勾选来源（其它板块 / 通用规则）合并到当前板块，去重、不覆盖已有 */
+  const syncSectionNotes = useCallback(
+    (target: string) => {
+      const picked = (syncSources[target] ?? []).filter(k => k !== target)
+      const list = [...notesFor(sectionNotes, target)]
+      let added = 0
+      for (const src of picked) {
+        for (const rule of notesFor(sectionNotes, src)) {
+          if (rule.trim() && !list.includes(rule)) {
+            list.push(rule)
+            added++
+          }
+        }
+      }
+      if (added === 0) {
+        toast.error('没有新规则可同步（勾选的规则都已存在）')
+        return
+      }
+      const next = { ...sectionNotes, [target]: list }
+      setSectionNotes(next)
+      persistNotes(next)
+      toast.success(`已同步 ${added} 条规则到本板块`)
+      setSyncOpenFor('')
+    },
+    [syncSources, sectionNotes, persistNotes, toast],
   )
 
   /**
@@ -1568,23 +1597,6 @@ export default function DataEntry() {
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const [columns, setColumns] = useState<LiveReportColumn[]>(LIVE_REPORT_COLUMNS)
 
-  /**
-   * 规则原来是按「板块 key」分开存的，问题一堆：
-   * 板块重建/改名后 key 变了就变孤儿；换到别的板块看又是空的；识别时只带当前板块那份。
-   * 这些规则本质是「怎么填」的通用要求（百分比带 %、¥ 不带、时间段格式…），
-   * 所以统一合并成一份全局规则（key = __all__），任何板块都显示、都生效（2026-11-06 用户反馈后改）。
-   */
-  const globalNotes = useMemo(() => {
-    const out = [...(sectionNotes.__all__ ?? [])]
-    for (const [key, list] of Object.entries(sectionNotes)) {
-      if (key === '__all__') continue
-      for (const rule of list ?? []) {
-        if (rule.trim() && !out.includes(rule)) out.push(rule)
-      }
-    }
-    return out
-  }, [sectionNotes])
-
   /** 上一次自动填入的定值：用来区分「用户手改过」和「规则带来的值」 */
   const lastFixedValuesRef = useRef<Record<string, string>>({})
   /**
@@ -1593,15 +1605,24 @@ export default function DataEntry() {
    * 且当前值仍等于上次自动填的旧值时，才跟着更新。
    */
   useEffect(() => {
-    const fixedValues = parseFixedValues(globalNotes, columns)
-    const prev = lastFixedValuesRef.current
-    lastFixedValuesRef.current = fixedValues
     if (rows.length === 0) return
+    const fixedBySection = new Map<string, Record<string, string>>()
+    for (const row of rows) {
+      const pf = String(row.platform ?? '')
+      if (!fixedBySection.has(pf)) {
+        fixedBySection.set(pf, parseFixedValues(notesFor(sectionNotes, pf), columns))
+      }
+    }
+    lastFixedValuesRef.current = Object.fromEntries(
+      [...fixedBySection.values()].flatMap(v => Object.entries(v)),
+    )
     setRows(prevRows => {
       let any = false
       const next = prevRows.map(row => {
         const vals = { ...row.values }
         let touched = false
+        const fixedValues = fixedBySection.get(String(row.platform ?? '')) ?? {}
+        const prev = lastFixedValuesRef.current
         for (const c of columns) {
           if (c.platform !== row.platform || c.source !== 'fixed') continue
           const want = fixedValues[c.key]
@@ -1617,23 +1638,7 @@ export default function DataEntry() {
       })
       return any ? next : prevRows
     })
-  }, [columns, globalNotes, rows])
-
-  useEffect(() => {
-    setSectionNotes(prev => {
-      const keys = Object.keys(prev).filter(k => k !== '__all__')
-      if (keys.length === 0) return prev
-      const merged: string[] = [...(prev.__all__ ?? [])]
-      for (const key of keys) {
-        for (const rule of prev[key] ?? []) {
-          if (rule.trim() && !merged.includes(rule)) merged.push(rule)
-        }
-      }
-      const next: Record<string, string[]> = { __all__: merged }
-      persistNotes(next)
-      return next
-    })
-  }, [persistNotes])
+  }, [columns, sectionNotes, rows])
 
   /** 一键清空某个板块这一行的全部字段值（截图不动） */
   const clearSectionValues = useCallback(
@@ -1926,7 +1931,8 @@ export default function DataEntry() {
       const platformColumns = columns.filter(c => c.platform === platform)
       // 「规则固定」智能型：规则里写了定值的字段不发给 AI（后面直接填值）；
       // 只有格式说明 / 没写规则的，仍按普通视觉识别让 AI 读图、再由规则修正。
-      const fixedValues = parseFixedValues(globalNotes, platformColumns)
+      const activeNotes = notesFor(sectionNotes, platform)
+      const fixedValues = parseFixedValues(activeNotes, platformColumns)
       const columnsForAI = platformColumns.map(c =>
         c.source === 'fixed' && !fixedValues[c.key] ? { ...c, source: 'vision' as const } : c,
       )
@@ -1976,7 +1982,7 @@ export default function DataEntry() {
           columns: columnsForAI,
           runId, // 暂停时按这个 id 找到本次任务
           // 空规则（刚点「添加一条」还没写）不发给模型
-          extraInstructions: globalNotes.map(n => n.trim()).filter(Boolean),
+          extraInstructions: activeNotes.map(n => n.trim()).filter(Boolean),
         })
         // 这次识别真正写进来的字段（非空、且与旧值不同）→ 高光 5 秒。
         // 之前只有「低置信度」黄框，识别干净时一个提示都没有，用户看不出改了哪些格子。
@@ -2069,7 +2075,7 @@ export default function DataEntry() {
       columns,
       sectionLabel,
       setImagesOf,
-      globalNotes,
+      sectionNotes,
     ],
   )
 
@@ -2507,6 +2513,8 @@ export default function DataEntry() {
       {/* 按平台分板块：每个板块自带「截图识别 + 数据行」，板块与当前账号无关 */}
       {view === 'entry' &&
         sectionPlatforms.map(pf => {
+          // 当前板块实际生效的规则（没有自己的一套时继承通用规则）
+          const activeNotes = notesFor(sectionNotes, pf)
           // 板块 key 是字符串，平台枚举只在取平台名/默认字段时用
           const pk = pf as LiveControlPlatform
           const pfColumns = columns.filter(c => (c.platform as string) === pf)
@@ -2570,7 +2578,8 @@ export default function DataEntry() {
                     <span className="shrink-0 text-[12px] font-medium text-muted-foreground">
                       填写规则
                       <span className="ml-1 text-[10px] font-normal text-muted-foreground/70">
-                        所有板块通用
+                        {sectionNotes[pf] === undefined ? '继承通用规则' : '本板块独立'} ·{' '}
+                        {activeNotes.length} 条
                       </span>
                     </span>
                     <RuleComposer
@@ -2588,14 +2597,80 @@ export default function DataEntry() {
                       <Send className="w-3 h-3 mr-1" />
                       添加规则
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 shrink-0 px-2 text-[11px]"
+                      onClick={() => setSyncOpenFor(prev => (prev === pf ? '' : pf))}
+                      title="从其它板块勾选规则，合并到本板块"
+                    >
+                      <Copy className="w-3 h-3 mr-1" />
+                      规则同步
+                    </Button>
                   </div>
+
+                  {/* 规则同步：勾选其它板块 / 通用规则，合并到本板块（去重、不覆盖已有） */}
+                  {syncOpenFor === pf && (
+                    <div className="mt-1.5 rounded-md border bg-background/70 px-2 py-1.5">
+                      <p className="mb-1 text-[10px] text-muted-foreground">
+                        勾选来源，把它们的规则合并到本板块（自动去重，不改已有规则）
+                      </p>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1">
+                        {[
+                          { key: '__all__', name: '通用规则' },
+                          ...sectionPlatforms
+                            .filter(p => p !== pf)
+                            .map(p => ({ key: p, name: sectionLabel(p) })),
+                        ].map(src => (
+                          <label key={src.key} className="flex items-center gap-1 text-[11px]">
+                            <input
+                              type="checkbox"
+                              className="h-3 w-3 cursor-pointer accent-primary"
+                              checked={(syncSources[pf] ?? []).includes(src.key)}
+                              onChange={e =>
+                                setSyncSources(prev => {
+                                  const cur = prev[pf] ?? []
+                                  return {
+                                    ...prev,
+                                    [pf]: e.target.checked
+                                      ? [...cur, src.key]
+                                      : cur.filter(k => k !== src.key),
+                                  }
+                                })
+                              }
+                            />
+                            {src.name}（{notesFor(sectionNotes, src.key).length} 条）
+                          </label>
+                        ))}
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => syncSectionNotes(pf)}
+                          disabled={(syncSources[pf] ?? []).length === 0}
+                        >
+                          <Copy className="w-3 h-3 mr-1" />
+                          同步选中
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => setSyncOpenFor('')}
+                        >
+                          取消
+                        </Button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* 规则列表：一条一行、随内容长高。常用模板、「已写 N 条」提示、
                       底部重复的「添加一条」都已按用户要求删掉；空规则不会发给模型。
                       高度封顶约 4 行（104px），规则再多就在这里上下滑动，不把页面顶长 */}
-                  {globalNotes.length > 0 && (
+                  {activeNotes.length > 0 && (
                     <div className="rule-scroll mt-1 max-h-[104px] space-y-0.5 overflow-y-auto overscroll-contain pr-1">
-                      {globalNotes.map((note, i) => (
+                      {activeNotes.map((note, i) => (
                         <div
                           // biome-ignore lint/suspicious/noArrayIndexKey: 规则是纯文本列表，允许重复文本、顺序固定
                           key={`${pf}-note-${i}`}
