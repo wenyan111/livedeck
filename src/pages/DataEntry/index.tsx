@@ -1460,10 +1460,24 @@ export default function DataEntry() {
   const [syncSources, setSyncSources] = useState<Record<string, string[]>>({})
   /** 板块切换条：'' = 全部板块（原样纵向全览），否则只显示选中的那个板块 */
   const [activeSection, setActiveSection] = useState('')
+  /** 「全部板块」视图下，鼠标最后停留的板块卡片（全局粘贴时用来判断目标板块） */
+  const hoveredSectionRef = useRef('')
   /** 选中的板块被删掉时回到「全部板块」，避免页面空白 */
   useEffect(() => {
     if (activeSection && !sectionPlatforms.includes(activeSection)) setActiveSection('')
   }, [sectionPlatforms, activeSection])
+  /**
+   * 切换板块时把「当前选中行」也切过去。
+   * 以前 activeRowId 一直停在第一个板块，导致切到快手后：蓝圈不在、识别结果写错行、
+   * 粘贴截图也进了抖音（用户 2026-11-08）。
+   */
+  useEffect(() => {
+    if (!activeSection) return
+    const sectionRows = rows.filter(r => (r.platform as string) === activeSection)
+    if (sectionRows.length === 0) return
+    if (sectionRows.some(r => r.id === activeRowId)) return
+    setActiveRowId(sectionRows[0].id)
+  }, [activeSection, rows, activeRowId])
 
   /** 添加当前板块自己的规则（第一次改动会自动从通用规则复制一份出来） */
   const addSectionNote = useCallback(
@@ -1972,18 +1986,32 @@ export default function DataEntry() {
     toast.success('已清空截图，可以继续拖下一场的图了')
   }
 
-  // 支持从剪贴板粘贴截图（macOS 截屏后 Cmd+V / Windows Ctrl+V）
+  /**
+   * 支持从剪贴板粘贴截图（macOS 截屏后 Cmd+V / Windows Ctrl+V）。
+   *
+   * 🔴 目标板块必须取「用户正在看的那个板块」，不能用 activeRow.platform：
+   * 切换板块时 activeRowId 不会跟着变，会一直指向第一个板块（抖音），
+   * 于是「在快手模块粘贴，图却进了抖音」（用户 2026-11-08 报的 bug）。
+   * 优先级：切换条选中的板块 → 焦点所在卡片 → 鼠标最后停留的卡片 → 当前选中行。
+   */
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items
       if (!items) return
+      const focusedCard = (document.activeElement as HTMLElement | null)?.closest?.(
+        '[data-section-key]',
+      ) as HTMLElement | null
+      const target = (activeSection ||
+        focusedCard?.dataset.sectionKey ||
+        hoveredSectionRef.current ||
+        String(activeRow?.platform ?? 'douyin')) as LiveControlPlatform
       let hasImage = false
       Array.from(items).forEach(item => {
         if (item.kind === 'file' && item.type.startsWith('image/')) {
           const file = item.getAsFile()
           if (file) {
             hasImage = true
-            addImageFromFile(file, activeRow?.platform ?? 'douyin')
+            addImageFromFile(file, target)
           }
         }
       })
@@ -1991,7 +2019,7 @@ export default function DataEntry() {
     }
     window.addEventListener('paste', onPaste)
     return () => window.removeEventListener('paste', onPaste)
-  }, [addImageFromFile, activeRow?.platform])
+  }, [addImageFromFile, activeRow?.platform, activeSection])
 
   /**
    * 识别 → 结果写入该板块当前活跃的那一行。
@@ -2283,17 +2311,13 @@ export default function DataEntry() {
   )
 
   /**
-   * 自动归档进「总表」：每次改动（识别/手填/增删行）防抖后把有内容的行 upsert 进总表。
-   * 去重键是「日期 + 板块 + 场次」，同一场重复识别只会更新同一行（用户 2026-11-05 需求）。
+   * 🔴 这里**故意没有「自动归档」effect**（用户 2026-11-08 报的 bug）：
+   * 以前每次识别 / 手填 / 改格子后防抖 1.2s 就自动 upsert 进总表，
+   * 导致「没点『同步到总表』按钮，软件内总表也变了」，按钮形同虚设。
+   * 现在软件内总表**只由板块底部的按钮写入**（syncSectionToLedger），
+   * 外部 Excel 只由总表页顶部按钮写入。两条都是手动、都可预期。
+   * 注意：删掉自动归档后，录入页改完但没点同步时，总表保持原样 —— 这正是用户要的。
    */
-  useEffect(() => {
-    // 注意：这里**不能**用 loadedRef 拦（它是给存档用的），
-    // 否则刚打开时恢复出来的历史行不会归档；空行会被 hasAnyValue 过滤掉，所以安全。
-    const t = setTimeout(() => {
-      void archiveRowsToLedger(rows).catch(() => {})
-    }, 1200)
-    return () => clearTimeout(t)
-  }, [rows, archiveRowsToLedger])
 
   // ── 总表：按板块分组，一个板块一张表 ──
   /**
@@ -2707,7 +2731,13 @@ export default function DataEntry() {
           /** 本板块里被勾选的截图（可多选重认） */
           const pfPicked = pickedImages[pf] ?? []
           return (
-            <Card key={pf}>
+            <Card
+              key={pf}
+              data-section-key={pf}
+              onMouseEnter={() => {
+                hoveredSectionRef.current = pf
+              }}
+            >
               <CardHeader>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -3179,17 +3209,15 @@ export default function DataEntry() {
               <div>
                 <CardTitle className="text-base">日报总表</CardTitle>
                 <CardDescription className="text-xs">
-                  共 {ledger.length} 条记录 · 按「日期 + 板块 +
-                  场次」自动去重；格子里可以直接改，改完自动存
+                  共 {ledger.length} 条记录 · 格子里可以直接改，改完自动存
                   <span className="block text-[11px] text-muted-foreground/80">
-                    按板块分表：各板块只用自己的字段；导出的 Excel 每个板块一张工作表，
-                    新建板块配好字段后在这里点同步会自动建表
+                    录入页的数据<b>只有点了板块底部的「同步到总表」才会写进这里</b>； 同一场按「日期
+                    + 板块 + 场次」去重，各板块只用自己的字段
                   </span>
                   <span className="block text-[11px] text-muted-foreground/80">
-                    板块里的「同步到总表」只更新本页数据；
                     <b>外部 Excel 只在下面这个按钮同步</b>
                     {ledgerSync.enabled
-                      ? `（目标：${syncFileName}，由软件覆盖写入，别在里面改，改了会被下次同步冲掉）`
+                      ? `（每个板块一张工作表，目标：${syncFileName}，由软件覆盖写入，别在里面改）`
                       : ''}
                   </span>
                 </CardDescription>
