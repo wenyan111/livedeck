@@ -21,8 +21,12 @@ export class LiveReportColumnsService {
       const raw = await fs.readFile(this.filePath, 'utf-8')
       const parsed = JSON.parse(raw) as LiveReportColumn[]
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // 补齐缺失字段，避免旧格式缺字段导致前端报错
+        // 只规范化必需字段，**其余字段一律原样保留**。
+        // 🔴 以前是逐个挑 6 个字段重建对象，把 decimals / formula / suffix
+        // 这些可选配置全丢了 —— 用户重启后发现「自定义公式、小数位、显示后缀
+        // 又没了」（2026-11-08 排查带 % 不生效时定位）。以后新增字段也不会再丢。
         return parsed.map(c => ({
+          ...c,
           // 旧数据没有 platform：内置那批本来就是抖音字段，统一归到 douyin
           platform: (c.platform ?? 'douyin') as LiveReportColumn['platform'],
           key: String(c.key ?? ''),
