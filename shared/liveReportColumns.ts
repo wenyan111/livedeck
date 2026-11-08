@@ -42,6 +42,16 @@ export interface LiveReportColumn {
    * （用户 2026-11-05 要求「可以自定义字段四舍五入」）
    */
   decimals?: number
+  /**
+   * 显示后缀（用户 2026-11-08 要求）：结果后面自动补上的文字，如 `%`、`万`、`元`、`人`。
+   *
+   * ⚠️ 和 `unit` 不是一回事、不冲突：
+   * - `unit` 管**输入换算**（把识别到的「1.5%」转成数字 `1.5`）；
+   * - `suffix` 管**输出展示**（把 `1.5` 变成 `1.5%`）。
+   * 两者可以同时设，正好互补。后缀不参与数值计算（公式取值会剥掉非数字字符），
+   * 但写进 Excel 是文本而不是数值 —— 要在这列上求和/做图表的话别加后缀。
+   */
+  suffix?: string
 }
 
 /**
@@ -312,6 +322,32 @@ function actualCount(
   const n = toNumber(raw[key] ?? '')
   if (n === null) return null
   return col?.unit === 'wan' ? n * 10000 : n
+}
+
+/** 给值补上列配置里的「显示后缀」（如 % / 万），已经有就不再加；空值原样返回 */
+export function withColumnSuffix(column: LiveReportColumn, value: string): string {
+  const v = String(value ?? '')
+  if (!v.trim()) return v
+  const suffix = String(column.suffix ?? '').trim()
+  if (!suffix || v.trimEnd().endsWith(suffix)) return v
+  return v.trimEnd() + suffix
+}
+
+/**
+ * 批量给一行的值补后缀（就地修改）。
+ *
+ * 只在「程序写入」的路径调用：识别结果合并、自动计算重算、列配置变更对齐。
+ * **不要在手填的 onChange 里调用**，否则每敲一个字符都会被补上 %，光标会乱跳；
+ * 手填的值用户自己写全（如 `1.5%`），显示时也不重复补。
+ */
+export function applyColumnSuffixes(
+  values: Record<string, string>,
+  columns: LiveReportColumn[],
+): void {
+  for (const col of columns) {
+    if (values[col.key] === undefined) continue
+    values[col.key] = withColumnSuffix(col, values[col.key])
+  }
 }
 
 /**

@@ -35,6 +35,7 @@ import type { DataEntrySavedState } from 'shared/dataEntryState'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { LedgerSyncConfig } from 'shared/ledgerSync'
 import {
+  applyColumnSuffixes,
   COMPUTED_DEPENDENCY_KEYS,
   computeDerivedValues,
   computedRuleOf,
@@ -47,6 +48,7 @@ import {
   parseDurationHours,
   roundByColumn,
   unknownRefsOf,
+  withColumnSuffix,
 } from 'shared/liveReportColumns'
 import { providers } from 'shared/providers'
 import { platformLabels } from '@/abilities'
@@ -427,6 +429,8 @@ function reconcileRows(rows: DataRow[], newColumns: LiveReportColumn[]): DataRow
       if (label) next.weekLabel = label
     }
     Object.assign(next, computeDerivedValues(next, newColumns))
+    // 最后补「显示后缀」（如 %）：识别、手填旧值、计算出来的值都在这里统一带上
+    applyColumnSuffixes(next, newColumns)
     return { ...r, values: next }
   })
 }
@@ -1097,7 +1101,7 @@ function ColumnManagerModal({
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头：第一格是拖动手柄的位置 */}
-          <div className="grid grid-cols-[18px_20px_1fr_82px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[18px_20px_1fr_82px_56px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <input
               type="checkbox"
               className="h-3.5 w-3.5 cursor-pointer accent-primary"
@@ -1118,7 +1122,12 @@ function ColumnManagerModal({
               ⇅
             </span>
             <span>标签名</span>
-            <span>单位</span>
+            <span title="输入换算：把识别到的原文转成数字，例如「1.5%」→「1.5」、「9700」→「0.97万」。不负责显示单位">
+              单位
+            </span>
+            <span title="输出后缀：结果后面自动补的文字，如 % / 万 / 元。和「单位」互不冲突，留空就不加">
+              后缀
+            </span>
             <span title="规则固定：规则里写「字段名：定值」就直接填入、不发给 AI；没写定值则仍按截图识别 + 规则修正">
               类型
             </span>
@@ -1145,7 +1154,7 @@ function ColumnManagerModal({
                 setDragIndex(null)
                 setOverIndex(null)
               }}
-              className={`grid grid-cols-[18px_20px_1fr_82px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
+              className={`grid grid-cols-[18px_20px_1fr_82px_56px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
                 dragIndex === idx ? 'opacity-40' : ''
               } ${
                 overIndex === idx && dragIndex !== null && dragIndex !== idx
@@ -1207,6 +1216,13 @@ function ColumnManagerModal({
                   <SelectItem value="text">文本</SelectItem>
                 </SelectContent>
               </Select>
+              <Input
+                value={col.suffix ?? ''}
+                onChange={e => update(idx, { suffix: e.target.value })}
+                className="h-8 text-xs"
+                placeholder="—"
+                title="显示后缀：识别/自动计算出来的值后面自动补的文字（如 % / 万 / 元）。留空不加；已经有后缀不会重复加。手填的值请自己写全"
+              />
               <Select
                 value={col.source}
                 onValueChange={s => update(idx, { source: s as LiveReportColumn['source'] })}
@@ -2129,6 +2145,8 @@ export default function DataEntry() {
             if (recognizedWeek) merged.weekLabel = recognizedWeek
             // 重算派生列
             Object.assign(merged, computeDerivedValues(merged, platformColumns))
+            // 识别 / 规则固定 / 自动算出来的值统一补显示后缀（如 %）
+            applyColumnSuffixes(merged, platformColumns)
             return { ...r, values: merged, lowConfidence: result.lowConfidence ?? [] }
           }),
         )
@@ -2536,9 +2554,14 @@ export default function DataEntry() {
             const label = weekdayLabel(val)
             if (label) next.weekLabel = label
           }
-          // 改了基础列时即时重算派生列
+          // 改了基础列时即时重算派生列（只给重算出来的列补后缀，
+          // 不碰用户正在输入的那个格子，否则每敲一个字符都会被补 %）
           if (COMPUTED_DEPENDENCY_KEYS.includes(key)) {
-            Object.assign(next, computeDerivedValues(next, columns))
+            const derived = computeDerivedValues(next, columns)
+            for (const [k, v] of Object.entries(derived)) {
+              const col = columns.find(c => c.key === k)
+              next[k] = col ? withColumnSuffix(col, v) : v
+            }
           }
           // 人手动改过这个格子 = 已确认，去掉低置信度橙框
           const lowConfidence = (r.lowConfidence ?? []).filter(k => k !== key)
