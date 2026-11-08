@@ -28,13 +28,19 @@ export const STORAGE_KEYS = {
 } as const
 
 /**
- * 已废弃的 localStorage 键名（历史版本使用）
- * 用于版本迁移时清理旧数据
+ * 已废弃的 localStorage 键名（历史版本使用），用于版本迁移时清理旧数据。
+ *
+ * 🔴 这里必须**显式写死**，绝对不能用「白名单之外的所有 key」动态推导：
+ * 以前写成 `getAllStorageKeys().filter(k => !Object.values(STORAGE_KEYS).includes(k))`，
+ * 于是所有新功能加进来的 key（填写规则 `data-entry-section-notes`、快速开始、
+ * 侧栏开关、输入框高度…）全被当成「废弃键」。每次版本号一变，
+ * `main.tsx` 启动时的 `autoCleanupStorage()` 就把它们删光 ——
+ * 2026-11-08 升级 1.3.3 时，用户 10 / 10 / 14 条填写规则就是这样没的。
+ *
+ * 目前没有需要清理的历史键，留空数组。以后确实要淘汰某个旧键，手动加进来即可；
+ * 宁可留几个没用的 key，也不能误删用户配置。
  */
-export const DEPRECATED_STORAGE_KEYS: string[] = getAllStorageKeys().filter(
-  key =>
-    !Object.values(STORAGE_KEYS).includes(key as (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]),
-)
+export const DEPRECATED_STORAGE_KEYS: string[] = []
 
 /**
  * 按账号存储的 localStorage 键名列表
@@ -196,12 +202,16 @@ export function getAllStorageKeys(): string[] {
 }
 
 /**
- * 启动程序时自动判断是否需要执行版本迁移清理
+ * 启动时只记录当前版本号，**绝不在启动时删除任何 localStorage 数据**。
+ *
+ * 以前这里会调 `performFullCleanup()`（清废弃键 + 清孤儿账号数据），
+ * 结果版本号一变就误删新功能的配置（2026-11-08 事故）。
+ * 清理这种不可逆操作只保留在设置页由用户手动点；
+ * 启动阶段只读不写业务数据，符合「别做启动时迁移/兜底」的约定。
  */
 export function autoCleanupStorage(): void {
-  // 检查是否需要执行版本迁移清理
   const storedVersion = localStorage.getItem(STORAGE_VERSION_KEY)
   if (storedVersion !== APP_VERSION) {
-    performFullCleanup()
+    localStorage.setItem(STORAGE_VERSION_KEY, APP_VERSION)
   }
 }
