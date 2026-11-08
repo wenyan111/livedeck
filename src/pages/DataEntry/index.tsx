@@ -2226,15 +2226,14 @@ export default function DataEntry() {
   }, [rows, activeRowId])
 
   /**
-   * 自动归档进「总表」：每次改动（识别/手填/增删行）防抖后把有内容的行 upsert 进总表。
-   * 去重键是「日期 + 板块 + 场次」，同一场重复识别只会更新同一行（用户 2026-11-05 需求）。
+   * 把指定的录入行归档进「软件内的日报总表」。
+   * 只做 upsert（按 日期 + 板块 + 场次 去重），**绝不删记录** ——
+   * 总表格子里用户可以直接改值并自动存，整表替换会把这些手改冲掉。
    */
-  useEffect(() => {
-    // 注意：这里**不能**用 loadedRef 拦（它是给存档用的），
-    // 否则刚打开时恢复出来的历史行不会归档；空行会被 hasAnyValue 过滤掉，所以安全。
-    const t = setTimeout(() => {
+  const archiveRowsToLedger = useCallback(
+    async (targetRows: DataRow[]): Promise<number> => {
       const now = Date.now()
-      const records: LedgerRecord[] = rows
+      const records: LedgerRecord[] = targetRows
         .filter(r => hasAnyValue(r.values))
         .map(r => ({
           // id 必须是总表自己的（不能借用行 id，否则改过日期/场次的行会撞 id）
@@ -2246,14 +2245,55 @@ export default function DataEntry() {
           createdAt: now,
           updatedAt: now,
         }))
-      if (records.length === 0) return
-      window.ipcRenderer
-        .invoke(IPC_CHANNELS.dataEntry.upsertLedger, records)
-        .then((all: LedgerRecord[]) => setLedger(all))
-        .catch(() => {})
+      if (records.length === 0) return 0
+      const all = (await window.ipcRenderer.invoke(
+        IPC_CHANNELS.dataEntry.upsertLedger,
+        records,
+      )) as LedgerRecord[]
+      setLedger(all ?? [])
+      return records.length
+    },
+    [sectionLabel],
+  )
+
+  /** 板块底部「同步到总表」：只把**这个板块**的数据写进软件内总表，绝不碰外部 Excel */
+  const [archiving, setArchiving] = useState('')
+  const syncSectionToLedger = useCallback(
+    async (pf: string) => {
+      const sectionRows = rows.filter(r => (r.platform as string) === pf)
+      if (sectionRows.length === 0) {
+        toast.error('这个板块还没有数据行')
+        return
+      }
+      setArchiving(pf)
+      try {
+        const count = await archiveRowsToLedger(sectionRows)
+        toast.success(
+          count > 0
+            ? `已把「${sectionLabel(pf)}」的 ${count} 行同步到软件内日报总表（不改动外部 Excel 文件）`
+            : '这个板块还没填内容，没有可同步的数据',
+        )
+      } catch (error) {
+        toast.error(`同步失败：${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setArchiving('')
+      }
+    },
+    [rows, archiveRowsToLedger, sectionLabel, toast],
+  )
+
+  /**
+   * 自动归档进「总表」：每次改动（识别/手填/增删行）防抖后把有内容的行 upsert 进总表。
+   * 去重键是「日期 + 板块 + 场次」，同一场重复识别只会更新同一行（用户 2026-11-05 需求）。
+   */
+  useEffect(() => {
+    // 注意：这里**不能**用 loadedRef 拦（它是给存档用的），
+    // 否则刚打开时恢复出来的历史行不会归档；空行会被 hasAnyValue 过滤掉，所以安全。
+    const t = setTimeout(() => {
+      void archiveRowsToLedger(rows).catch(() => {})
     }, 1200)
     return () => clearTimeout(t)
-  }, [rows, sectionLabel])
+  }, [rows, archiveRowsToLedger])
 
   // ── 总表：按板块分组，一个板块一张表 ──
   /**
@@ -2376,15 +2416,15 @@ export default function DataEntry() {
     }
   }, [ledgerExportPayload, toast])
 
-  /** 把当前整表写进同步目标文件（内部用，不弹提示） */
+  /**
+   * 把软件内总表写进外部 .xlsx —— **只有「日报总表」页顶部的同步按钮会走到这里**。
+   * 用户 2026-11-08：板块底部的按钮改成只归档软件内总表，外部文件一律只从总表页同步。
+   */
   const writeLedgerSync = useCallback(
-    async (outputPath: string, onlySheet?: string) => {
+    async (outputPath: string) => {
       if (!outputPath) return
-      // 每个板块底部都有这个按钮：只把该板块那张工作表传过去，别动其它工作表
-      const sheets = onlySheet
-        ? ledgerExportPayload.sheets.filter(s => s.name === onlySheet)
-        : ledgerExportPayload.sheets
-      // 这个板块还没配字段时不要碰文件，避免把已有内容冲掉
+      const sheets = ledgerExportPayload.sheets
+      // 还没配字段时不要碰文件，避免把已有内容冲掉
       if (sheets.length === 0) return
       setSyncing(true)
       try {
@@ -2432,35 +2472,29 @@ export default function DataEntry() {
     toast.success('已停止实时同步，已写入的数据不动')
   }, [ledgerSync.filePath, toast])
 
-  /** 立刻同步一次；传 onlySheet 时只更新该板块的工作表（板块底部按钮） */
-  const handleSyncNow = useCallback(
-    async (onlySheet?: string) => {
-      if (!ledgerSync.filePath) {
-        await handleStartLedgerSync()
-        return
-      }
-      const sheets = onlySheet
-        ? ledgerExportPayload.sheets.filter(s => s.name === onlySheet)
-        : ledgerExportPayload.sheets
-      if (sheets.length === 0) {
-        toast.error('这个板块还没有配置字段，先去「管理列」添加')
-        return
-      }
-      await writeLedgerSync(ledgerSync.filePath, onlySheet)
-      toast.success(
-        `已同步 ${sheets.length} 个板块（共 ${sheets.reduce((n, s) => n + s.rows.length, 0)} 行）→ ${ledgerSync.filePath}`,
-      )
-    },
-    [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast],
-  )
+  /** 把整张总表写进外部 Excel；只在「日报总表」页顶部按钮调用 */
+  const handleSyncNow = useCallback(async () => {
+    if (!ledgerSync.filePath) {
+      await handleStartLedgerSync()
+      return
+    }
+    const sheets = ledgerExportPayload.sheets
+    if (sheets.length === 0) {
+      toast.error('还没有配置任何板块字段，先去「管理列」添加')
+      return
+    }
+    await writeLedgerSync(ledgerSync.filePath)
+    toast.success(
+      `已同步 ${sheets.length} 个板块（共 ${sheets.reduce((n, s) => n + s.rows.length, 0)} 行）→ ${ledgerSync.filePath}`,
+    )
+  }, [ledgerSync.filePath, writeLedgerSync, handleStartLedgerSync, ledgerExportPayload, toast])
 
   /**
-   * 总表变了就自动写文件（防抖 900ms，避免连续敲字时反复写盘）。
-   * 关着的时候只是空转，不产生任何 IO。
+   * 外部 Excel 没有「自动同步定时器」：写文件只发生在
+   * ①「日报总表」页顶部的同步按钮 ② 第一次点「实时同步到表格」选完文件那一次。
+   * 之前这里写着「已挪到主进程 LedgerAutoSyncService，总表一变就写」——
+   * 那是过时注释，主进程并不存在这个服务，已改正（2026-11-08）。
    */
-  // 自动同步已经挪到主进程（LedgerAutoSyncService）：字段一改、总表一变就写，
-  // 而且开软件 2 秒后补写一次，不依赖本页面是否打开。
-  // 这里只保留手动的「同步到总表」按钮（点击时立刻写一次并提示结果）。
 
   /** 更新某行的某个字段值 */
   const updateCellValue = useCallback(
@@ -3081,28 +3115,18 @@ export default function DataEntry() {
                 )}
 
                 <div className="flex flex-wrap gap-2 border-t pt-3">
-                  {/* 不再单独导出一个文件：直接写进「总表」那个 .xlsx（用户 2026-11-06：
-                      不用重复导出文件，统一同步到总表） */}
+                  {/*
+                    用户 2026-11-08：这个按钮只把**本板块**的数据归档到软件内的
+                    「日报总表」，不写外部 Excel。外部文件只从总表页顶部按钮同步。
+                  */}
                   <Button
                     size="sm"
-                    onClick={
-                      ledgerSync.enabled
-                        ? () => handleSyncNow(sectionLabel(pf))
-                        : () => handleStartLedgerSync()
-                    }
-                    disabled={syncing || ledgerExportPayload.sheets.length === 0}
-                    title={
-                      ledgerSync.filePath
-                        ? `写入：${ledgerSync.filePath}`
-                        : '选一个表格文件，之后总表一变就自动写进去'
-                    }
+                    onClick={() => syncSectionToLedger(pf)}
+                    disabled={archiving === pf}
+                    title="只把本板块的数据同步到软件内的「日报总表」，不改动电脑上的 Excel 文件；外部表格请到「日报总表」页点同步"
                   >
-                    <FileSpreadsheet className="w-4 h-4 mr-1" />
-                    {syncing
-                      ? '同步中…'
-                      : ledgerSync.enabled
-                        ? `同步到总表 · ${syncFileName}`
-                        : '同步到总表（先选文件）'}
+                    <Table className="w-4 h-4 mr-1" />
+                    {archiving === pf ? '同步中…' : '同步到总表'}
                   </Button>
                   <Button
                     size="sm"
@@ -3159,14 +3183,15 @@ export default function DataEntry() {
                   场次」自动去重；格子里可以直接改，改完自动存
                   <span className="block text-[11px] text-muted-foreground/80">
                     按板块分表：各板块只用自己的字段；导出的 Excel 每个板块一张工作表，
-                    新建板块配好字段后点同步会自动建表
+                    新建板块配好字段后在这里点同步会自动建表
                   </span>
-                  {ledgerSync.enabled && (
-                    <span className="block text-[11px] text-muted-foreground/80">
-                      实时写入 {syncFileName}
-                      （这个文件由软件覆盖写入，别在里面改，改了会被下次同步冲掉）
-                    </span>
-                  )}
+                  <span className="block text-[11px] text-muted-foreground/80">
+                    板块里的「同步到总表」只更新本页数据；
+                    <b>外部 Excel 只在下面这个按钮同步</b>
+                    {ledgerSync.enabled
+                      ? `（目标：${syncFileName}，由软件覆盖写入，别在里面改，改了会被下次同步冲掉）`
+                      : ''}
+                  </span>
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -3195,7 +3220,7 @@ export default function DataEntry() {
                   导出（{ledgerExportPayload.totalRows} 行 · {ledgerExportPayload.sheets.length}{' '}
                   张工作表）
                 </Button>
-                {/* 实时同步：总表一变就把整张表写进你电脑上的 .xlsx，不用反复导出 */}
+                {/* 外部 .xlsx 的唯一写入口：点一次写一次（板块里的按钮不写文件） */}
                 {ledgerSync.enabled ? (
                   <div className="flex items-center gap-1">
                     <Button
@@ -3210,7 +3235,7 @@ export default function DataEntry() {
                       }`}
                     >
                       <FileSpreadsheet className="w-4 h-4 mr-1" />
-                      {syncing ? '同步中…' : `已同步 · ${syncFileName}`}
+                      {syncing ? '同步中…' : `同步到表格 · ${syncFileName}`}
                     </Button>
                     <Button
                       size="sm"
