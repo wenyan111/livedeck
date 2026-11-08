@@ -1,6 +1,6 @@
 # Changelog
 
-## 待发布
+## v1.3.4
 
 ### 🔴 修掉「升级版本后填写规则被清空」
 - 根因：`src/utils/storage.ts` 把 `DEPRECATED_STORAGE_KEYS` 定义成「当前 localStorage 里所有不在白名单的 key」，而 `main.tsx` 启动时会比对 `storage-version`，版本号一变就执行 `performFullCleanup()` 把这些 key 全删掉。升级到 **1.3.3** 时，用户的 `data-entry-section-notes`（通用 10 / 抖音 10 / 快手 14 条填写规则）连同快速开始、侧栏开关等 4 个 key 一起被误删 —— 这也是历史上「一更新/重装配置就没了」的主要原因。
