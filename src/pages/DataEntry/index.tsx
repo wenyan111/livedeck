@@ -669,15 +669,6 @@ function RowCard({
 }) {
   const [expanded, setExpanded] = useState(true)
 
-  const groups = useMemo(() => {
-    const map = new Map<string, LiveReportColumn[]>()
-    for (const c of columns) {
-      if (!map.has(c.group)) map.set(c.group, [])
-      map.get(c.group)?.push(c)
-    }
-    return Array.from(map.entries())
-  }, [columns])
-
   return (
     <div
       className={`border rounded-lg transition-colors ${
@@ -765,76 +756,69 @@ function RowCard({
               <i className="inline-block h-2.5 w-2.5 rounded-sm bg-success" /> 刚写入
             </span>
           </div>
-          {groups.map(([group, cols]) => (
-            <div key={group}>
-              <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {group}
-              </h3>
-              <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
-                {cols.map(col => {
-                  const val = row.values[col.key] ?? ''
-                  const isManual = col.source === 'manual'
-                  const isSkip = col.source === 'skip'
-                  const isComputed = col.source === 'computed'
-                  // 只有「本该是数字」的字段才画低置信度橙框；
-                  // 旧存档里误标的 session 等文字结论不会再显示（不改用户数据）
-                  const isLow = row.lowConfidence.includes(col.key) && expectsNumericValue(col)
-                  const filled = val.trim() !== ''
-                  const ring = flashKeys.includes(col.key)
-                    ? 'ring-2 ring-success bg-success/25 shadow-[0_0_10px_rgba(34,197,94,0.55)] transition-all duration-500'
-                    : isSkip
-                      ? 'bg-muted/60 opacity-60'
-                      : isComputed
-                        ? 'bg-accent/50'
-                        : isLow
-                          ? 'ring-2 ring-warning'
-                          : isManual
-                            ? 'bg-muted/50'
-                            : filled
-                              ? 'bg-success/10'
-                              : 'bg-destructive/10'
-                  const placeholder =
-                    col.key === 'time'
-                      ? '如 06:40-09:30'
+          <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
+            {columns.map(col => {
+              const val = row.values[col.key] ?? ''
+              const isManual = col.source === 'manual'
+              const isSkip = col.source === 'skip'
+              const isComputed = col.source === 'computed'
+              // 只有「本该是数字」的字段才画低置信度橙框；
+              // 旧存档里误标的 session 等文字结论不会再显示（不改用户数据）
+              const isLow = row.lowConfidence.includes(col.key) && expectsNumericValue(col)
+              const filled = val.trim() !== ''
+              const ring = flashKeys.includes(col.key)
+                ? 'ring-2 ring-success bg-success/25 shadow-[0_0_10px_rgba(34,197,94,0.55)] transition-all duration-500'
+                : isSkip
+                  ? 'bg-muted/60 opacity-60'
+                  : isComputed
+                    ? 'bg-accent/50'
+                    : isLow
+                      ? 'ring-2 ring-warning'
                       : isManual
-                        ? '（人工填写）'
-                        : isSkip
-                          ? '（留空）'
-                          : isComputed
-                            ? '（自动计算）'
-                            : ''
-                  return (
-                    <div key={col.key} className="space-y-px">
-                      <Label className="text-[10px] leading-tight text-muted-foreground">
-                        {col.label}
-                      </Label>
-                      <Input
-                        value={val}
-                        onChange={e => onUpdateValues(row.id, col.key, e.target.value)}
-                        className={`h-6 px-1.5 text-[11px] ${ring}`}
-                        disabled={isSkip}
-                        placeholder={placeholder}
-                        title={
-                          col.key === 'time'
-                            ? '时间段，如 06:40-09:30。只填开始时间时，会按「直播时长」自动补全结束时间'
-                            : col.decimals !== undefined
-                              ? `四舍五入到 ${col.decimals} 位小数`
-                              : undefined
-                        }
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+                        ? 'bg-muted/50'
+                        : filled
+                          ? 'bg-success/10'
+                          : 'bg-destructive/10'
+              const placeholder =
+                col.key === 'time'
+                  ? '如 06:40-09:30'
+                  : isManual
+                    ? '（人工填写）'
+                    : isSkip
+                      ? '（留空）'
+                      : isComputed
+                        ? '（自动计算）'
+                        : ''
+              return (
+                <div key={col.key} className="space-y-px">
+                  <Label className="text-[10px] leading-tight text-muted-foreground">
+                    {col.label}
+                  </Label>
+                  <Input
+                    value={val}
+                    onChange={e => onUpdateValues(row.id, col.key, e.target.value)}
+                    className={`h-6 px-1.5 text-[11px] ${ring}`}
+                    disabled={isSkip}
+                    placeholder={placeholder}
+                    title={
+                      col.key === 'time'
+                        ? '时间段，如 06:40-09:30。只填开始时间时，会按「直播时长」自动补全结束时间'
+                        : col.decimals !== undefined
+                          ? `四舍五入到 ${col.decimals} 位小数`
+                          : undefined
+                    }
+                  />
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-/** 列管理弹窗：增 / 删 / 改标签、单位、类型、分组 */
+/** 列管理弹窗：增 / 删 / 改标签、单位、类型 */
 function ColumnManagerModal({
   columns,
   platform,
@@ -1029,7 +1013,7 @@ function ColumnManagerModal({
               <Input
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder="搜索字段名 / key / 分组，快速定位"
+                placeholder="搜索字段名 / key / 单位，快速定位"
                 className="h-8 pl-8 pr-8 text-xs"
               />
               {query && (
@@ -1101,7 +1085,7 @@ function ColumnManagerModal({
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {/* 表头：第一格是拖动手柄的位置 */}
-          <div className="grid grid-cols-[18px_20px_1fr_82px_56px_100px_96px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[18px_20px_1fr_82px_56px_100px_76px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <input
               type="checkbox"
               className="h-3.5 w-3.5 cursor-pointer accent-primary"
@@ -1131,7 +1115,6 @@ function ColumnManagerModal({
             <span title="规则固定：规则里写「字段名：定值」就直接填入、不发给 AI；没写定值则仍按截图识别 + 规则修正">
               类型
             </span>
-            <span>分组</span>
             <span title="四舍五入到几位小数">小数位</span>
             <span />
           </div>
@@ -1154,7 +1137,7 @@ function ColumnManagerModal({
                 setDragIndex(null)
                 setOverIndex(null)
               }}
-              className={`grid grid-cols-[18px_20px_1fr_82px_56px_100px_96px_76px_32px] gap-2 items-center rounded-md transition-colors ${
+              className={`grid grid-cols-[18px_20px_1fr_82px_56px_100px_76px_32px] gap-2 items-center rounded-md transition-colors ${
                 dragIndex === idx ? 'opacity-40' : ''
               } ${
                 overIndex === idx && dragIndex !== null && dragIndex !== idx
@@ -1239,11 +1222,6 @@ function ColumnManagerModal({
                   <SelectItem value="computed">自动计算</SelectItem>
                 </SelectContent>
               </Select>
-              <Input
-                value={col.group}
-                onChange={e => update(idx, { group: e.target.value })}
-                className="h-8 text-xs"
-              />
               {/* 每列单独设置四舍五入位数：原始 / 0 / 1 / 2 / 3 / 4 */}
               <Select
                 value={col.decimals === undefined ? 'raw' : String(col.decimals)}
