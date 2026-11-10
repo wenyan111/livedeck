@@ -992,7 +992,7 @@ function ColumnManagerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="rounded-lg bg-card shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+      <div className="rounded-lg bg-card shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col">
         {/* 头部收成两行：第一行只有标题/说明/列数，第二行才是操作按钮，
             原来全挤在一行，说明文字被按钮顶成三行（用户 2026-11-06：太乱） */}
         <div className="border-b px-5 py-3">
@@ -1033,11 +1033,11 @@ function ColumnManagerModal({
                 : ''}
             </span>
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 text-[11px]"
+              className="h-7 shrink-0 whitespace-nowrap px-2 text-[11px]"
               onClick={importFromFile}
               title="选一个 Excel / CSV，把第一行表头一次性导成字段"
             >
@@ -1048,38 +1048,42 @@ function ColumnManagerModal({
                 key={src}
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-[11px]"
+                className="h-7 shrink-0 whitespace-nowrap px-2 text-[11px]"
                 onClick={() => importFrom(src)}
                 title={`把「${labelOf(src)}」的 ${count} 个字段复制到本板块`}
               >
                 <Copy className="w-3 h-3 mr-1" /> 导入「{labelOf(src)}」{count}
               </Button>
             ))}
-            <span className="flex-1" />
-            {/* 字段太多时一个个点垃圾桶太慢：勾选后一次删掉，或一键清空（用户 2026-11-06） */}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
-              onClick={removeSelected}
-              disabled={selected.size === 0 || searching}
-              title={
-                searching ? '清除搜索后可批量删除（避免误删被筛掉的字段）' : '把勾选的字段一次删掉'
-              }
-            >
-              <Trash2 className="w-3 h-3 mr-1" /> 删除选中
-              {selected.size > 0 ? ` (${selected.size})` : ''}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
-              onClick={removeAll}
-              disabled={draft.length === 0 || searching}
-              title={searching ? '清除搜索后可清空全部字段' : '清空本板块所有字段'}
-            >
-              全部删除
-            </Button>
+            {/* 删除类操作单独成组靠右；按钮多到换行时也不会被容器裁掉 */}
+            <div className="ml-auto flex items-center gap-2">
+              {/* 字段太多时一个个点垃圾桶太慢：勾选后一次删掉，或一键清空（用户 2026-11-06） */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 whitespace-nowrap px-2 text-[11px] text-destructive hover:text-destructive"
+                onClick={removeSelected}
+                disabled={selected.size === 0 || searching}
+                title={
+                  searching
+                    ? '清除搜索后可批量删除（避免误删被筛掉的字段）'
+                    : '把勾选的字段一次删掉'
+                }
+              >
+                <Trash2 className="w-3 h-3 mr-1" /> 删除选中
+                {selected.size > 0 ? ` (${selected.size})` : ''}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0 whitespace-nowrap px-2 text-[11px] text-destructive hover:text-destructive"
+                onClick={removeAll}
+                disabled={draft.length === 0 || searching}
+                title={searching ? '清除搜索后可清空全部字段' : '清空本板块所有字段'}
+              >
+                全部删除
+              </Button>
+            </div>
           </div>
         </div>
 
