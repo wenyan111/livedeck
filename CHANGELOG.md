@@ -4,17 +4,17 @@
 
 ### ➕ 新增平台「小红书RedLive」
 - 平台下拉新增 `redlive`，中控台地址 `https://redlive.xiaohongshu.com/live_center_control`（用户 2026-11-12 提供）。
-- 用户提供的 DevTools 截图里能看到 `single-spa-ark-app`，说明与「小红书千帆」是同一套应用，因此**复用千帆的 DOM 选择器 / 评论监听 / 商品弹卡实现**，只覆盖 URL、登录判定与平台名；千帆原行为不变。
+- 用户提供的 DevTools 截图确认整站是 `omikuji` SPA（登录页 / 账号选择页 / 中控台是同一套壳的不同路由），因此评论监听、商品弹卡等 DOM 实现复用千帆，连接/登录则**照蒲公英 `XiaohongshuPgyPlatform` 的骨架**单独实现；千帆与蒲公英行为不变。
 - 能力对齐千帆：自动回复（小红书监听源）、真 @ 观众、开价话术可发送（不自行检测开价）。
 - 配套补齐：下播信号（不写会关播不断开）、日报总表的平台归组（小红书）、自动弹窗的小红书 15 秒提示。
 - 登录流程实测为三步：`live_login`（短信/扫码）→ `live_account_select`（用户手点选账号）→ `live_center_control`（中控台）。
-- 🐞 **连接判定反复调试后的最终方案**（用户 2026-11-12 逐轮反馈）：
-  - 千帆的 `.user-info-wrapper` / `.app-root-topbar-wrapper` 在 RedLive 上不存在，照搬会让 `waitForSelector(..., {timeout:0})` 无限等 → 一直「连接中」。改用 DevTools 实测存在的 `#single-spa-ark-app` / `.live-detail-container`（登录页和选账号页都没有这个根节点）。
-  - 一度改成「goto 后立刻看 URL 判定」，会误判：页面随后才异步跳到 `live_login`，导致**还没扫码就显示已连接**，并存下登录页的空登录态 → 每次都要重新扫码。
-  - 🔴 真正根因：**登录页正则限定了 `customer|redlive` 子域**，而实际登录页可能落在任意 `xiaohongshu.com` 子域下，`helper.connect()` 的 `waitForURL(LOGIN_PAGE)` 因此永不命中，两个 `timeout:0` 的 Promise 一起挂着。
-  - 最终**回到和其它平台完全相同的标准竞速**（父类 `helper.connect()`），只把参数配对：登录页正则放宽为 `/xiaohongshu\.com\/.*(login|passport|account_select)/`（`live_center_control` 不会被误判），已登录标志用 `#single-spa-ark-app`。不另造连接流程，登录态按现有机制存 `chrome-config` 的 `storageState`，修好后不再重复扫码。
-  - `login()` 要等用户**点完账号、跳进中控台**才返回，登录页 / 选账号页都继续等。
-  - ⚠️ 之前误判时可能存过空的登录态，修好后**可能还需要最后扫一次码**，之后就会记住。
+- 🔴 **连接判定反复调试后的最终结论**（用户 2026-11-12 逐轮反馈 + 最终 DevTools 截图）：
+  - 🔴 真正根因是**选择器全猜错了**：`#single-spa-ark-app`、千帆的 `.app-root-topbar-wrapper` / `.user-info-wrapper` 在 RedLive 页面上都不存在，而 `timeout: 0` 的 `waitForSelector` 会永远等下去 → 页面明明进了中控台，软件一直「连接中」。
+  - 用户最终提供的 Elements 面板确认真实 DOM 为 `#omikuji-app` → `.page-container` → `.container-layout` → `.container-nav .right .user-info .user-name`（右上角「亲爱的黎子（瘦身版）」）。现以 `.user-name` 判定已登录、`#omikuji-app .page-container` 判定中控台渲染完成。
+  - 连接流程照蒲公英：`goto` 中控台 → `Promise.race([等跳登录页, 等右上角昵称])` → 已登录则 `openUrlByElement` 重开中控台页（绕开小红书反爬）→ 等容器出现；未登录返回 `false`，由 `AccountSession` 切有头浏览器给用户扫码。
+  - 登录页正则放宽为不限子域的 `/xiaohongshu\.com\/.*(login|passport|account_select)/`（`live_center_control` 不会被误判）；`login()` 等用户**点完账号、跳进中控台**才返回。
+  - `getAccountName()` 改用 `.user-name` 快速读取，不再 `waitForSelector` 卡 30 秒报「获取用户名失败」。
+  - 登录态本来就按账号存在 `chrome-config` 的 `storageState` 里；之前误判「已连接」时存下的是登录页的空状态，所以每次都要重扫。修好后**可能还需最后扫一次码**，之后就会记住。
 
 ## v1.3.5
 
