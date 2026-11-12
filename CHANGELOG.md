@@ -1,6 +1,6 @@
 # Changelog
 
-## 待发布
+## v1.3.6
 
 ### ➕ 新增平台「小红书RedLive」
 - 平台下拉新增 `redlive`，中控台地址 `https://redlive.xiaohongshu.com/live_center_control`（用户 2026-11-12 提供）。
