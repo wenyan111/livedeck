@@ -17,8 +17,17 @@ import { xiaohongshuElementFinder as elementFinder } from './elment-finder'
 
 const PLATFORM_NAME = '小红书' as const
 
+/** 不同小红书域名只有 URL 不同，DOM / 能力完全复用（千帆 ark、直播中控台 redlive） */
+export type XiaohongshuUrls = {
+  readonly LOGIN_PAGE: string
+  readonly LIVE_CONTROL_PAGE: string
+}
+
 /**
  * 小红书（千帆）
+ *
+ * 子类只需覆盖 `urls` / `loginRegex` / `platformLabel` 就能接入另一个小红书域名，
+ * 不用把 commentListener / elementFinder 整套复制一遍。
  */
 export class XiaohongshuPlatform
   implements IPlatform, IPerformPopup, IPerformComment, ICommentListener
@@ -26,6 +35,9 @@ export class XiaohongshuPlatform
   readonly _isCommentListener = true
   readonly _isPerformComment = true
   readonly _isPerformPopup = true
+  protected readonly urls: XiaohongshuUrls = URLS
+  protected readonly loginRegex = REGEXPS.LOGIN_PAGE
+  protected readonly platformLabel: string = PLATFORM_NAME
   private mainPage: Page | null = null
   private commentListener: XiaohongshuCommentListener | null = null
   private accountName = ''
@@ -34,13 +46,13 @@ export class XiaohongshuPlatform
     const { page } = browserSession
     const isConnected = await connect(page, {
       isInLiveControlSelector: SELECTORS.IN_LIVE_CONTROL,
-      liveControlUrl: URLS.LIVE_CONTROL_PAGE,
-      loginUrlRegex: REGEXPS.LOGIN_PAGE,
+      liveControlUrl: this.urls.LIVE_CONTROL_PAGE,
+      loginUrlRegex: this.loginRegex,
     })
 
     if (isConnected) {
       // 小红书反爬，直接用 goto 进入中控台加载不出元素
-      const newPage = await openUrlByElement(page, URLS.LIVE_CONTROL_PAGE)
+      const newPage = await openUrlByElement(page, this.urls.LIVE_CONTROL_PAGE)
       await page.close()
       browserSession.page = newPage
       this.mainPage = newPage
@@ -50,8 +62,8 @@ export class XiaohongshuPlatform
 
   async login(browserSession: BrowserSession): Promise<void> {
     const { page } = browserSession
-    if (!REGEXPS.LOGIN_PAGE.test(page.url())) {
-      await page.goto(URLS.LOGIN_PAGE)
+    if (!this.loginRegex.test(page.url())) {
+      await page.goto(this.urls.LOGIN_PAGE)
     }
     await page.waitForSelector(SELECTORS.LOGGED_IN, {
       timeout: 0,
@@ -125,6 +137,6 @@ export class XiaohongshuPlatform
   }
 
   get platformName() {
-    return PLATFORM_NAME
+    return this.platformLabel
   }
 }

@@ -8,6 +8,7 @@ import { TaobaoPlatform } from './taobao'
 import { WechatChannelPlatform } from './wechat-channels'
 import { XiaohongshuPlatform } from './xiaohongshu'
 import { XiaohongshuPgyPlatform } from './xiaohongshu-pgy'
+import { RedlivePlatform } from './xiaohongshu-redlive'
 
 export const platformFactory: Record<LiveControlPlatform, { new (): IPlatform }> = {
   buyin: BuyinPlatform,
@@ -19,4 +20,5 @@ export const platformFactory: Record<LiveControlPlatform, { new (): IPlatform }>
   eos: DouyinEosPlatform,
   dev: DevPlatform,
   pgy: XiaohongshuPgyPlatform,
+  redlive: RedlivePlatform,
 }

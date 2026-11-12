@@ -16,6 +16,7 @@ declare type LiveControlPlatform =
   | 'eos'
   | 'xiaohongshu'
   | 'pgy'
+  | 'redlive'
   | 'wxchannel'
   | 'kuaishou'
   | 'taobao'

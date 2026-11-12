@@ -345,6 +345,7 @@ const _PLATFORM_GROUP_LABELS: Record<string, string> = {
   wxchannel: '视频号',
   xiaohongshu: '小红书',
   pgy: '小红书',
+  redlive: '小红书',
   kuaishou: '快手',
   taobao: '淘宝',
   dev: '测试',

@@ -110,7 +110,7 @@ const GoodsListCard = React.memo(() => {
   // 这条备注只描述**小红书**的行为（弹卡 15 秒自动收回），
   // 挂到其它平台上会让人以为自己的平台也有这个限制，所以按平台显示。
   const platform = useCurrentLiveControl(ctx => ctx.platform)
-  const showXhsTip = platform === 'xiaohongshu'
+  const showXhsTip = platform === 'xiaohongshu' || platform === 'redlive'
 
   return (
     <Card>

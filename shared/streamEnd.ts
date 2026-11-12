@@ -33,6 +33,11 @@ export const STREAM_END_SIGNALS: Partial<Record<LiveControlPlatform, StreamEndSi
     { text: '直播已结束', scope: 'modal' },
     { text: '本场数据', scope: 'modal' },
   ],
+  // 小红书RedLive 与千帆同款应用，下播信号一致；独立 key 不写会关播不断开
+  redlive: [
+    { text: '直播已结束', scope: 'modal' },
+    { text: '本场数据', scope: 'modal' },
+  ],
   douyin: [{ text: '直播已结束', scope: 'modal' }],
   buyin: [{ text: '直播已结束', scope: 'modal' }],
 }

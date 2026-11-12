@@ -9,6 +9,7 @@ export const platformLabels: Record<LiveControlPlatform, string> = {
   eos: '抖音团购',
   xiaohongshu: '小红书千帆',
   pgy: '小红书蒲公英',
+  redlive: '小红书RedLive',
   wxchannel: '视频号',
   kuaishou: '快手小店',
   taobao: '淘宝',
@@ -102,6 +103,14 @@ export const abilities: Record<LiveControlPlatform, Ability> = {
     openPrice: { send: true, selfDetect: false },
   },
   pgy: {
+    autoReply: {
+      source: ['xiaohongshu'],
+    },
+    mention: true,
+    openPrice: { send: true, selfDetect: false },
+  },
+  // redlive.xiaohongshu.com 与千帆（ark）是同一套 single-spa 应用，能力一致
+  redlive: {
     autoReply: {
       source: ['xiaohongshu'],
     },
