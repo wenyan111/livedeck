@@ -25,10 +25,33 @@ export class RedlivePlatform extends XiaohongshuPlatform {
   protected readonly inLiveControlSelector = '#single-spa-ark-app, .live-detail-container'
 
   /**
-   * 登录判定只看 URL：
-   * - 已经在中控台 → 直接算登录完成，不再无谓跳一次登录页；
-   * - 否则等扫码后跳回中控台（timeout 0 是因为扫码可能要等几分钟）。
-   * 完全不依赖 DOM class，避免页面改版又把登录卡死。
+   * 连接流程自己实现，不用 helper.connect() 的
+   * `Promise.race([waitForURL(登录页), waitForSelector(中控台元素)])`：
+   * RedLive 登录成功后页面还会连续导航（日志里 3 次 navigated to live_center_control），
+   * 那两个 timeout:0 的 Promise 一直挂着，连接状态就迟迟不变（用户 2026-11-12 反馈
+   * 「扫码进中控台了但软件一直连接中」；日志里的 Target page closed 是用户后来
+   * 手动关窗口造成的，不是卡住的原因）。
+   *
+   * 这里**只看 goto 之后的 URL，一次判定、不等待、不悬挂**：
+   * 已登录 → 返回 true；未登录 → 返回 false，让 AccountSession 走它原本的流程
+   * （切有头浏览器给用户扫码 → login() 等回中控台 → 保存登录态 → 无头重连）。
+   * 千万别在这里「一直等到登录成功并返回 true」，否则有头浏览器根本不会被创建，
+   * 用户连扫码的窗口都看不到。
+   */
+  async connect(session: BrowserSession): Promise<boolean> {
+    const { page } = session
+    await page.goto(this.urls.LIVE_CONTROL_PAGE, { waitUntil: 'domcontentloaded' })
+    const url = page.url()
+    const isConnected = LIVE_CONTROL_URL_RE.test(url) && !this.loginRegex.test(url)
+    if (isConnected) {
+      this.mainPage = page
+    }
+    return isConnected
+  }
+
+  /**
+   * login() 作为兜底（正常流程上面的 connect 已等到中控台，不会被调用）。
+   * 只看 URL，完全不依赖 DOM class。
    */
   async login(session: BrowserSession): Promise<void> {
     const { page } = session

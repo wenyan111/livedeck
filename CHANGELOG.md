@@ -12,6 +12,8 @@
   - 根因：复用了千帆的 `.user-info-wrapper` / `.app-root-topbar-wrapper` 判定，RedLive 页面上没有这两个元素，而 `login()` 里的 `waitForSelector(..., {timeout: 0})` 会无限等下去。
   - 登录流程实测为「扫码 → `live_account_select` 选账号 → `live_center_control` 中控台」，中间的账号选择页以前会被误判成已登录或踢回扫码页，现纳入「未登录」判定，`login()` 也不再打断它。
   - 现在 `login()` **只看 URL**（等回到中控台），判定选择器换成 DevTools 实测存在的 `#single-spa-ark-app` / `.live-detail-container`；子类单独覆盖，千帆与蒲公英行为不变。
+  - 🐞 二次修复：登录完成后软件会关掉有头窗口、用保存的登录态**无头重连**，这一步又卡在 `helper.connect()` 的 `Promise.race([waitForURL(登录页), waitForSelector(中控台元素)])` —— 两个 `timeout: 0` 的 Promise 一直挂着，连接状态永远不更新（日志里连续 3 次 `navigated to ...live_center_control` 仍显示「连接中」；`Target page closed` 是用户手动关窗口造成的，不是卡住原因）。
+  - 现在 RedLive 单独实现 `connect()`：`goto` 后**只看 URL 一次判定**，已登录返回 `true`、未登录返回 `false`，不等待不悬挂。保留返回 `false` 很重要——`AccountSession` 靠它切换有头浏览器给用户扫码，改成「一直等到登录成功再返回 true」会导致连扫码窗口都不弹。
 
 ## v1.3.5
 
