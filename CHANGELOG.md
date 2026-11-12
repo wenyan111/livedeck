@@ -8,6 +8,10 @@
 - 能力对齐千帆：自动回复（小红书监听源）、真 @ 观众、开价话术可发送（不自行检测开价）。
 - 配套补齐：下播信号（不写会关播不断开）、日报总表的平台归组（小红书）、自动弹窗的小红书 15 秒提示。
 - ⚠️ 登录页地址按千帆的 `customer.xiaohongshu.com/login?service=...` 规律推断，**首次连接需实测**；若登录跳转或某个选择器不一致，按实际页面单独覆盖即可，不影响其它小红书平台。
+- 🐞 **修掉「扫码成功却一直显示连接中」**（用户 2026-11-12 实测）：
+  - 根因：复用了千帆的 `.user-info-wrapper` / `.app-root-topbar-wrapper` 判定，RedLive 页面上没有这两个元素，而 `login()` 里的 `waitForSelector(..., {timeout: 0})` 会无限等下去。
+  - 登录流程实测为「扫码 → `live_account_select` 选账号 → `live_center_control` 中控台」，中间的账号选择页以前会被误判成已登录或踢回扫码页，现纳入「未登录」判定，`login()` 也不再打断它。
+  - 现在 `login()` **只看 URL**（等回到中控台），判定选择器换成 DevTools 实测存在的 `#single-spa-ark-app` / `.live-detail-container`；子类单独覆盖，千帆与蒲公英行为不变。
 
 ## v1.3.5
 

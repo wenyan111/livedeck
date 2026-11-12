@@ -38,6 +38,9 @@ export class XiaohongshuPlatform
   protected readonly urls: XiaohongshuUrls = URLS
   protected readonly loginRegex = REGEXPS.LOGIN_PAGE
   protected readonly platformLabel: string = PLATFORM_NAME
+  /** 子类可覆盖：不同小红书域名的「已登录 / 已进中控台」判定元素可能不同 */
+  protected readonly loggedInSelector: string = SELECTORS.LOGGED_IN
+  protected readonly inLiveControlSelector: string = SELECTORS.IN_LIVE_CONTROL
   private mainPage: Page | null = null
   private commentListener: XiaohongshuCommentListener | null = null
   private accountName = ''
@@ -45,7 +48,7 @@ export class XiaohongshuPlatform
   async connect(browserSession: BrowserSession) {
     const { page } = browserSession
     const isConnected = await connect(page, {
-      isInLiveControlSelector: SELECTORS.IN_LIVE_CONTROL,
+      isInLiveControlSelector: this.inLiveControlSelector,
       liveControlUrl: this.urls.LIVE_CONTROL_PAGE,
       loginUrlRegex: this.loginRegex,
     })
@@ -65,7 +68,7 @@ export class XiaohongshuPlatform
     if (!this.loginRegex.test(page.url())) {
       await page.goto(this.urls.LOGIN_PAGE)
     }
-    await page.waitForSelector(SELECTORS.LOGGED_IN, {
+    await page.waitForSelector(this.loggedInSelector, {
       timeout: 0,
     })
   }

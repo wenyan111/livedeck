@@ -16,6 +16,10 @@ export const URLS: XiaohongshuUrls = {
 }
 
 export const REGEXPS = {
-  // 小红书统一登录在 customer 域；同时兼容新域名自己跳登录页的情况
-  LOGIN_PAGE: /.*(customer|redlive)\.xiaohongshu\.com\/.*(login|passport).*/,
+  // 登录流程实测（用户 2026-11-12 四张截图）：
+  //   customer 统一登录(扫码) → redlive.xiaohongshu.com/live_account_select(选账号)
+  //   → redlive.xiaohongshu.com/live_center_control(中控台)
+  // 账号选择页必须算「还没登录」，否则 connect() 会误判成功、
+  // login() 也会把用户正在选账号的页面重新 goto 掉。
+  LOGIN_PAGE: /.*(customer|redlive)\.xiaohongshu\.com\/.*(login|passport|live_account_select).*/,
 } as const
