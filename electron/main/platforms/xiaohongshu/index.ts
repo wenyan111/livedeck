@@ -41,7 +41,7 @@ export class XiaohongshuPlatform
   /** 子类可覆盖：不同小红书域名的「已登录 / 已进中控台」判定元素可能不同 */
   protected readonly loggedInSelector: string = SELECTORS.LOGGED_IN
   protected readonly inLiveControlSelector: string = SELECTORS.IN_LIVE_CONTROL
-  protected mainPage: Page | null = null
+  private mainPage: Page | null = null
   private commentListener: XiaohongshuCommentListener | null = null
   private accountName = ''
 

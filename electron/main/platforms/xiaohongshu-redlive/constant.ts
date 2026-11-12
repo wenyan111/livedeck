@@ -16,10 +16,13 @@ export const URLS: XiaohongshuUrls = {
 }
 
 export const REGEXPS = {
-  // 登录流程实测（用户 2026-11-12 四张截图）：
-  //   customer 统一登录(扫码) → redlive.xiaohongshu.com/live_account_select(选账号)
-  //   → redlive.xiaohongshu.com/live_center_control(中控台)
-  // 账号选择页必须算「还没登录」，否则 connect() 会误判成功、
-  // login() 也会把用户正在选账号的页面重新 goto 掉。
-  LOGIN_PAGE: /.*(customer|redlive)\.xiaohongshu\.com\/.*(login|passport|live_account_select).*/,
+  // 登录流程实测（用户 2026-11-12 截图）：
+  //   ...xiaohongshu.com/live_login (短信/扫码)
+  //   → redlive.xiaohongshu.com/live_account_select (选账号，用户手点)
+  //   → redlive.xiaohongshu.com/live_center_control (中控台)
+  // 🔴 不要限定子域：登录页可能落在 customer / redlive / www 下。
+  // 之前限定 (customer|redlive)，helper.connect() 的 waitForURL(LOGIN_PAGE)
+  // 永远不命中，两个 timeout:0 的 Promise 一起挂着 → 一直「连接中」。
+  // live_center_control 不含 login / account_select，不会被误判成登录页。
+  LOGIN_PAGE: /xiaohongshu\.com\/.*(login|passport|account_select)/,
 } as const

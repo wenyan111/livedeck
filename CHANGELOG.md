@@ -7,13 +7,14 @@
 - 用户提供的 DevTools 截图里能看到 `single-spa-ark-app`，说明与「小红书千帆」是同一套应用，因此**复用千帆的 DOM 选择器 / 评论监听 / 商品弹卡实现**，只覆盖 URL、登录判定与平台名；千帆原行为不变。
 - 能力对齐千帆：自动回复（小红书监听源）、真 @ 观众、开价话术可发送（不自行检测开价）。
 - 配套补齐：下播信号（不写会关播不断开）、日报总表的平台归组（小红书）、自动弹窗的小红书 15 秒提示。
-- ⚠️ 登录页地址按千帆的 `customer.xiaohongshu.com/login?service=...` 规律推断，**首次连接需实测**；若登录跳转或某个选择器不一致，按实际页面单独覆盖即可，不影响其它小红书平台。
-- 🐞 **修掉「扫码成功却一直显示连接中」**（用户 2026-11-12 实测）：
-  - 根因：复用了千帆的 `.user-info-wrapper` / `.app-root-topbar-wrapper` 判定，RedLive 页面上没有这两个元素，而 `login()` 里的 `waitForSelector(..., {timeout: 0})` 会无限等下去。
-  - 登录流程实测为「扫码 → `live_account_select` 选账号 → `live_center_control` 中控台」，中间的账号选择页以前会被误判成已登录或踢回扫码页，现纳入「未登录」判定，`login()` 也不再打断它。
-  - 现在 `login()` **只看 URL**（等回到中控台），判定选择器换成 DevTools 实测存在的 `#single-spa-ark-app` / `.live-detail-container`；子类单独覆盖，千帆与蒲公英行为不变。
-  - 🐞 二次修复：登录完成后软件会关掉有头窗口、用保存的登录态**无头重连**，这一步又卡在 `helper.connect()` 的 `Promise.race([waitForURL(登录页), waitForSelector(中控台元素)])` —— 两个 `timeout: 0` 的 Promise 一直挂着，连接状态永远不更新（日志里连续 3 次 `navigated to ...live_center_control` 仍显示「连接中」；`Target page closed` 是用户手动关窗口造成的，不是卡住原因）。
-  - 现在 RedLive 单独实现 `connect()`：`goto` 后**只看 URL 一次判定**，已登录返回 `true`、未登录返回 `false`，不等待不悬挂。保留返回 `false` 很重要——`AccountSession` 靠它切换有头浏览器给用户扫码，改成「一直等到登录成功再返回 true」会导致连扫码窗口都不弹。
+- 登录流程实测为三步：`live_login`（短信/扫码）→ `live_account_select`（用户手点选账号）→ `live_center_control`（中控台）。
+- 🐞 **连接判定反复调试后的最终方案**（用户 2026-11-12 逐轮反馈）：
+  - 千帆的 `.user-info-wrapper` / `.app-root-topbar-wrapper` 在 RedLive 上不存在，照搬会让 `waitForSelector(..., {timeout:0})` 无限等 → 一直「连接中」。改用 DevTools 实测存在的 `#single-spa-ark-app` / `.live-detail-container`（登录页和选账号页都没有这个根节点）。
+  - 一度改成「goto 后立刻看 URL 判定」，会误判：页面随后才异步跳到 `live_login`，导致**还没扫码就显示已连接**，并存下登录页的空登录态 → 每次都要重新扫码。
+  - 🔴 真正根因：**登录页正则限定了 `customer|redlive` 子域**，而实际登录页可能落在任意 `xiaohongshu.com` 子域下，`helper.connect()` 的 `waitForURL(LOGIN_PAGE)` 因此永不命中，两个 `timeout:0` 的 Promise 一起挂着。
+  - 最终**回到和其它平台完全相同的标准竞速**（父类 `helper.connect()`），只把参数配对：登录页正则放宽为 `/xiaohongshu\.com\/.*(login|passport|account_select)/`（`live_center_control` 不会被误判），已登录标志用 `#single-spa-ark-app`。不另造连接流程，登录态按现有机制存 `chrome-config` 的 `storageState`，修好后不再重复扫码。
+  - `login()` 要等用户**点完账号、跳进中控台**才返回，登录页 / 选账号页都继续等。
+  - ⚠️ 之前误判时可能存过空的登录态，修好后**可能还需要最后扫一次码**，之后就会记住。
 
 ## v1.3.5
 
